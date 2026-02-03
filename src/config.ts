@@ -13,9 +13,6 @@ export interface Config {
   modelProvider: string;
   modelId: string;
   
-  // API settings
-  apiKey: string | undefined; // Optional API key for securing the proxy
-  
   // Logging
   logLevel: 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace';
 }
@@ -56,9 +53,6 @@ export function loadConfig(): Config {
     // Model settings
     modelProvider: getEnv('MODEL_PROVIDER', 'github-copilot'),
     modelId: getEnv('MODEL_ID', 'gpt-4o'),
-    
-    // API settings
-    apiKey: process.env.API_KEY,
     
     // Logging
     logLevel: (getEnv('LOG_LEVEL', 'info') as Config['logLevel']),
