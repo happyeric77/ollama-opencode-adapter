@@ -270,43 +270,19 @@ User: "what time is it?" (no time-related tool available)
   }
 
   /**
-   * Fallback rule-based tool selection when OpenCode fails
+   * Fallback tool selection when OpenCode is unavailable
+   * Returns "chat" to maintain service availability without assuming tool names
    */
-  private fallbackToolSelection(userMessage: string): string {
-    const msg = userMessage.toLowerCase();
+  private fallbackToolSelection(_userMessage: string): string {
+    console.log('[FALLBACK] OpenCode unavailable, returning conversational mode');
+    console.log('[FALLBACK] User will receive a graceful response instead of tool execution');
     
-    // Status query patterns
-    const statusPatterns = [
-      /是.*的嗎/, /現在.*嗎/, /.*狀態/, /.*如何/, /幾度/, /多少/,
-      /is.*on/, /is.*off/, /what.*temperature/, /how.*bright/,
-      /ついています/, /状態/, /温度/
-    ];
-    
-    const isStatusQuery = statusPatterns.some(pattern => pattern.test(msg));
-    
-    if (isStatusQuery) {
-      console.log('[FALLBACK] Detected status query → GetLiveContext');
-      return JSON.stringify({ tool_name: 'GetLiveContext', arguments: {} });
-    }
-    
-    // Control patterns
-    const turnOnPatterns = [/開/, /turn on/, /つけ/];
-    const turnOffPatterns = [/關/, /turn off/, /消/];
-    
-    if (turnOnPatterns.some(p => p.test(msg))) {
-      console.log('[FALLBACK] Detected turn on command → HassTurnOn');
-      // Extract device name (simplified)
-      return JSON.stringify({ tool_name: 'HassTurnOn', arguments: {} });
-    }
-    
-    if (turnOffPatterns.some(p => p.test(msg))) {
-      console.log('[FALLBACK] Detected turn off command → HassTurnOff');
-      return JSON.stringify({ tool_name: 'HassTurnOff', arguments: {} });
-    }
-    
-    // Default: treat as conversation
-    console.log('[FALLBACK] No pattern matched → chat');
-    return JSON.stringify({ tool_name: 'chat', arguments: {} });
+    // Always return "chat" - let conversation handler deal with the message
+    // This is safer than guessing which tools exist
+    return JSON.stringify({ 
+      tool_name: 'chat', 
+      arguments: {} 
+    });
   }
 
   /**
