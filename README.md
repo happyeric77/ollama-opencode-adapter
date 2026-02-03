@@ -1,193 +1,265 @@
-# ha-ai
+# ollama-opencode-adapter
 
-OpenAI-compatible proxy server for Home Assistant using OpenCode SDK and GitHub Copilot.
+> Universal adapter implementing Ollama-compatible API using OpenCode SDK with manual function calling support
 
-## Overview
+## What Is This?
 
-**ha-ai** allows Home Assistant to use GitHub Copilot (via OpenCode) as its voice assistant LLM backend for smart home device control. It translates natural language commands into Home Assistant tool calls using the native OpenAI integration.
+This is a **protocol adapter** that allows applications expecting Ollama's API (with native function calling) to use OpenCode SDK instead.
+
+**The Problem:**
+- **Standard**: Ollama API with native function calling (what apps expect)
+- **Reality**: OpenCode SDK with simple prompt API (what we have)
+- **Gap**: OpenCode doesn't support function calling natively
+
+**The Solution:**
+- Implement Ollama API endpoints (`/api/chat`, etc.)
+- Manually parse tools and user intent via prompt engineering
+- Invoke OpenCode to make tool selection decisions
+- Convert responses back to Ollama format
+
+## Why Is This Complex?
+
+You might expect ~50 lines for format conversion. We have ~500 lines because:
+
+1. **Manual Function Calling** (~200 lines)
+   - OpenCode doesn't support function calling
+   - We must prompt the LLM to select tools
+   - We must parse JSON from unstructured text responses
+
+2. **Stability & Fallback** (~100 lines)
+   - OpenCode can timeout or become unresponsive
+   - We implement timeouts, retries, fallback mechanisms
+   - Graceful degradation when OpenCode is unavailable
+
+3. **Multi-turn Conversations** (~100 lines)
+   - Detect when user wants chat vs tool execution
+   - Handle tool result processing (convert to natural language)
+   - Prevent infinite loops from repeated requests
+
+4. **Format Conversions** (~100 lines)
+   - Ollama format ↔ internal format ↔ OpenCode format
+   - Tool schema transformations
+   - Error handling and logging
 
 ## Architecture
 
 ```
-Home Assistant (192.168.68.60)
-  └─ OpenAI Integration
-      └─ ha-ai Proxy (port 3000)
-          └─ @opencode-ai/sdk
-              └─ opencode serve (localhost:7272)
-                  └─ GitHub Copilot / gpt-4o
+┌─────────────────┐
+│  Client App     │  (e.g., Home Assistant, Custom App)
+│  (Ollama API)   │
+└────────┬────────┘
+         │ POST /api/chat
+         │ {messages, tools}
+         ▼
+┌─────────────────────────────────────────┐
+│  ollama-opencode-adapter (this project) │
+│                                         │
+│  1. Parse Ollama request                │
+│  2. Extract system context & tools      │
+│  3. Call OpenCode for tool selection    │
+│  4. Parse response, detect intent       │
+│  5. Return Ollama-formatted response    │
+└────────┬────────────────────────────────┘
+         │ OpenCode SDK
+         ▼
+┌─────────────────┐
+│  OpenCode       │  (port 7272)
+│  Server         │
+└─────────────────┘
 ```
 
-## Features
+## Use Cases
 
-- OpenAI-compatible `/v1/chat/completions` endpoint
-- Intent extraction from natural language commands
-- Automatic mapping to Home Assistant tool calls (HassTurnOn, HassTurnOff, etc.)
-- Session-based communication with OpenCode SDK
-- Structured logging with Pino
+### Example 1: Home Assistant
 
-## Prerequisites
+Home Assistant's Ollama integration can point to this adapter to leverage OpenCode/GitHub Copilot for voice assistant functionality.
 
-1. **OpenCode CLI** installed and authenticated with GitHub Copilot
-   ```bash
-   npm install -g opencode
-   opencode auth login
-   ```
+```yaml
+# Home Assistant configuration.yaml
+conversation:
+  - platform: ollama
+    url: http://localhost:3000  # ← This adapter
+    model: gpt-4o
+```
 
-2. **OpenCode server running**
+### Example 2: Custom Tool-Based App
+
+Any application that:
+- Has defined tools/functions
+- Wants to use OpenCode/GitHub Copilot
+- Expects Ollama-compatible API
+
+Can use this adapter without modifications.
+
+## Installation & Setup
+
+### Prerequisites
+
+1. **OpenCode Server** running on port 7272
    ```bash
    opencode serve --port 7272
    ```
 
-3. **Node.js v22+** installed
+2. **Node.js v22+**
 
-## Installation
+### Setup
 
-```bash
-npm install
-```
+1. Clone and install:
+   ```bash
+   git clone <repo>
+   cd ollama-opencode-adapter
+   npm install
+   ```
+
+2. Configure environment:
+   ```bash
+   cp .env.example .env
+   # Edit .env with your settings
+   ```
+
+3. Run:
+   ```bash
+   npm run dev   # Development
+   npm run build && npm start  # Production
+   ```
 
 ## Configuration
 
-Copy `.env.example` to `.env` and configure:
-
 ```bash
-cp .env.example .env
+# Server
+PORT=3000
+HOST=0.0.0.0
+LOG_LEVEL=info
+
+# OpenCode
+OPENCODE_URL=http://localhost
+OPENCODE_PORT=7272
+
+# Model
+MODEL_PROVIDER=github-copilot
+MODEL_ID=gpt-4o
+
+# Optional: API Key for securing the proxy
+# API_KEY=your-secret-key-here
 ```
 
-Environment variables:
+## API Reference
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PORT` | 3000 | Server port |
-| `HOST` | 0.0.0.0 | Server host |
-| `LOG_LEVEL` | info | Log level (fatal, error, warn, info, debug, trace) |
-| `OPENCODE_URL` | http://localhost | OpenCode server URL |
-| `OPENCODE_PORT` | 7272 | OpenCode server port |
-| `MODEL_PROVIDER` | github-copilot | LLM provider |
-| `MODEL_ID` | gpt-4o | Model ID |
-| `API_KEY` | - | Optional API key for securing the proxy |
+### POST /api/chat
 
-## Usage
+Standard Ollama chat completion endpoint with tool support.
 
-### Development
-
-```bash
-npm run dev
-```
-
-### Production
-
-```bash
-npm run build
-npm start
-```
-
-### Testing
-
-```bash
-npm test
-npm run test:ui    # Run tests with UI
-npm run test:run   # Run tests once
-```
-
-## API Endpoints
-
-### Health Check
-
-```bash
-GET /health
-```
-
-### Chat Completions (OpenAI-compatible)
-
-```bash
-POST /v1/chat/completions
-Content-Type: application/json
-
+**Request:**
+```json
 {
   "model": "gpt-4o",
   "messages": [
+    {"role": "system", "content": "You are a helpful assistant"},
+    {"role": "user", "content": "What's the weather?"}
+  ],
+  "tools": [
     {
-      "role": "user",
-      "content": "Turn on the living room light"
+      "type": "function",
+      "function": {
+        "name": "GetWeather",
+        "description": "Get current weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "location": {"type": "string"}
+          }
+        }
+      }
     }
   ]
 }
 ```
 
-Response:
-
+**Response:**
 ```json
 {
-  "id": "chatcmpl-1234567890",
-  "object": "chat.completion",
-  "created": 1234567890,
   "model": "gpt-4o",
-  "choices": [
-    {
-      "index": 0,
-      "message": {
-        "role": "assistant",
-        "content": null,
-        "tool_calls": [
-          {
-            "id": "call_1234567890",
-            "type": "function",
-            "function": {
-              "name": "HassTurnOn",
-              "arguments": "{\"name\":\"living room light\"}"
-            }
-          }
-        ]
-      },
-      "finish_reason": "tool_calls"
-    }
-  ],
-  "usage": {
-    "prompt_tokens": 0,
-    "completion_tokens": 0,
-    "total_tokens": 0
-  }
+  "created_at": "2026-02-03T...",
+  "message": {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "function": {
+          "name": "GetWeather",
+          "arguments": {"location": "Tokyo"}
+        }
+      }
+    ]
+  },
+  "done": true
 }
 ```
 
-## Supported Intents
+## Limitations & Trade-offs
 
-| Intent | Home Assistant Tool | Example |
-|--------|---------------------|---------|
-| turn_on | HassTurnOn | "Turn on the living room light" |
-| turn_off | HassTurnOff | "Turn off kitchen lights" |
-| set_temperature | HassTurnOn (with temp) | "Set temperature to 22 degrees" |
-| set_brightness | HassLightSet | "Set brightness to 80%" |
+### Compared to Native Ollama
+
+| Feature | Native Ollama | This Adapter |
+|---------|--------------|--------------|
+| Function calling | ✅ Native | ⚠️ Manual (via prompting) |
+| Response time | Fast (~1-2s) | Slower (~3-5s) |
+| Reliability | Very stable | Depends on OpenCode |
+| Accuracy | High | Good (depends on prompt) |
+
+### Known Issues
+
+1. **OpenCode Timeouts**: OpenCode occasionally times out. We have fallback mechanisms that return conversational responses.
+2. **Prompt Engineering**: Tool selection accuracy depends on prompt quality. The current prompt works well but may need tuning for specific use cases.
+3. **Latency**: Extra LLM calls add ~2-3s compared to native function calling.
 
 ## Project Structure
 
 ```
-ha-ai/
+ollama-opencode-adapter/
 ├── src/
 │   ├── index.ts              # Main entry point
-│   ├── server.ts             # Fastify server setup
+│   ├── server.ts             # Fastify server, request orchestration
 │   ├── config.ts             # Configuration loader
 │   ├── types/
-│   │   ├── openai.ts         # OpenAI API types
-│   │   └── intent.ts         # Intent extraction types
-│   └── services/
-│       └── opencode.ts       # OpenCode SDK wrapper
+│   │   ├── ollama.ts         # Ollama API types
+│   │   └── tool-selection.ts # Internal tool selection types
+│   ├── services/
+│   │   └── opencode.ts       # OpenCode SDK wrapper, tool selection logic
+│   └── adapters/
+│       └── ollamaAdapter.ts  # Format conversions (Ollama ↔ internal)
 ├── tests/
-│   ├── unit/
-│   └── integration/
-├── poc/                      # Phase 0 PoC tests
+│   ├── unit/                 # Unit tests
+│   └── integration/          # Integration tests
+├── docs/
+│   └── FUTURE_ENHANCEMENTS.md
 ├── package.json
 ├── tsconfig.json
 └── vitest.config.ts
 ```
 
-## Development Notes
+## Development
 
-- Phase 0 (PoC) completed with 100% success rate on intent extraction
-- Uses session-based OpenCode SDK (create → prompt → poll → delete)
-- Response times: 1-4 seconds (acceptable for voice assistant)
-- No custom Home Assistant components needed
+```bash
+# Run tests
+npm test
+
+# Run with watch mode
+npm run dev
+
+# Type checking
+npm run build
+```
+
+## Why This Exists
+
+OpenCode SDK is powerful but doesn't expose function calling APIs like OpenAI's Chat Completion API. This adapter bridges that gap, allowing any Ollama-compatible application to leverage OpenCode and its underlying models (like GitHub Copilot) without modification.
+
+This is a **workaround** necessitated by OpenCode's current API design. If OpenCode adds native function calling support in the future, much of this complexity could be removed.
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit issues or pull requests.
 
 ## License
 
