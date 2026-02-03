@@ -57,7 +57,7 @@ export class OpencodeService {
     }
     
     const {
-      sessionTitle = "ha-ai-session",
+      sessionTitle = "ollama-opencode-session",
       maxWaitMs = 30000,
       pollIntervalMs = 300,
     } = options;
@@ -91,9 +91,9 @@ export class OpencodeService {
         },
       });
       
-      // Add timeout to prompt call itself (10 seconds)
+      // Add timeout to prompt call itself (20 seconds for tool selection)
       const promptTimeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('session.prompt() timeout after 10s')), 10000)
+        setTimeout(() => reject(new Error('session.prompt() timeout after 20s')), 20000)
       );
       
       await Promise.race([promptPromise, promptTimeoutPromise]);
@@ -163,13 +163,13 @@ export class OpencodeService {
   /**
    * Extract tool selection from user message using available tools
    * 
-   * @param haSystemContext - YAML device list from HA
+   * @param systemContext - System context (device list, available data, etc.)
    * @param userMessage - User's command
-   * @param availableTools - Tools provided by HA
+   * @param availableTools - Tools provided by client
    * @returns JSON string with tool selection
    */
   async extractToolSelection(
-    haSystemContext: string,
+    systemContext: string,
     userMessage: string,
     availableTools: OllamaTool[]
   ): Promise<string> {
@@ -177,94 +177,96 @@ export class OpencodeService {
     // Format tools into LLM-friendly description
     const toolsDescription = formatToolsForLLM(availableTools);
     
-    const TOOL_SELECTION_PROMPT = `You are a smart home assistant for Home Assistant.
+    const TOOL_SELECTION_PROMPT = `You are a tool selection expert.
 
-${haSystemContext}
+Available Context:
+${systemContext}
 
-Available actions you can perform:
+Available Tools:
 ${toolsDescription}
 
-User request: "${userMessage}"
+User Request: "${userMessage}"
 
 CRITICAL: Respond with VALID JSON ONLY. No markdown, no explanations, no code blocks.
 
 Response Schema:
 {
-  "tool_name": "exact tool name from the available actions above OR 'chat' for conversation",
+  "tool_name": "exact tool name from available tools OR 'chat' for conversation",
   "arguments": {
     // parameters as defined in the tool schema (only if tool_name is not 'chat')
   }
 }
 
-Rules:
-1. DETERMINE REQUEST TYPE (CRITICAL - ALWAYS return valid JSON):
-   a) If the user wants to CONTROL HOME DEVICES (turn on/off, set brightness, change temperature, etc.):
-      → Choose appropriate tool from the list above
-   
-   b) If the user asks about DEVICE STATUS or STATE (is X on/off, what's the temperature, is X open/closed):
-      → Use GetLiveContext tool if available
-      → Return: {"tool_name": "GetLiveContext", "arguments": {}}
-      → Examples: "is the light on?", "what's the temperature?", "is the door locked?"
-   
-   c) If the user is having a CONVERSATION (greeting, question, chat, general inquiry):
-      → MUST return: {"tool_name": "chat", "arguments": {}}
-      → Examples: "hello", "how are you", "thank you", "what time is it", "tell me a joke"
+Rules for Intent Detection (Priority Order):
 
-2. For HOME DEVICE CONTROL requests:
-   - Match device names exactly from the Static Context above
-   - Use exact device names from 'names' field (e.g., "Light living room")
-   - For parameters with type 'array', use array format (e.g., "domain": ["light"])
+1. ACTION REQUEST (user wants to perform an action)
+   → Select the most appropriate action tool from the available tools list
+   → Fill in required parameters based on user's request and available context
+   → Extract parameter values from the user's request
    
-3. CRITICAL - Parameter selection for device control:
-   - If targeting a SPECIFIC DEVICE by name → use ONLY "name" + "domain" (do NOT include "area")
-   - If targeting ALL DEVICES in an area → use ONLY "area" + "domain" (do NOT include "name")
-   - NEVER include both "area" and "name" in the same request
+2. INFORMATION QUERY (user asks about status, state, or information)
+   → CRITICAL: Look for query-type tools in the available tools list
+   → Query tools often have names like "Get*", "Query*", "Fetch*", "*Status", "*Context"
+   → IMPORTANT: Status questions like "is X on?", "what's the status?", "is X open?" MUST use query tools
+   → If a query tool exists, use it with appropriate parameters
+   → If no query tool exists, return: {"tool_name": "chat", "arguments": {}}
+   
+3. CONVERSATION (greetings, thanks, general chat, unrelated questions)
+   → MUST return: {"tool_name": "chat", "arguments": {}}
+   → Examples: "hello", "how are you", "thank you", "tell me a joke"
+   → Time queries without a time tool: "what time is it?" → chat
 
-4. If you cannot determine which tool to use for a HOME CONTROL request:
-   - Return: {"tool_name": "unknown", "arguments": {}}
+Parameter Extraction Guidelines:
+- Extract parameter values directly from user's request
+- Use information from the system context when needed
+- Match parameter types exactly as defined in tool schema
+- For array types, use array format: ["value1", "value2"]
+- Do not include optional parameters if not mentioned by user
+
+Handling Ambiguity:
+- If user's intent is unclear for action requests: {"tool_name": "unknown", "arguments": {}}
+- If user asks for information but no query tool exists: {"tool_name": "chat", "arguments": {}}
+- When in doubt between action and conversation: prefer "chat"
 
 Examples:
-User: "turn on living room light"  ← Home control
-Device: "names: Light living room, domain: light"
-→ {"tool_name": "HassTurnOn", "arguments": {"name": "Light living room", "domain": ["light"]}}
-  NOTE: NO "area" field included!
 
-User: "turn off all living room lights"  ← All devices in area
-→ {"tool_name": "HassTurnOff", "arguments": {"area": "Living Room", "domain": ["light"]}}
-  NOTE: NO "name" field included!
-
-User: "こんにちは"  ← Conversation (Japanese greeting)
+User: "hello"
 → {"tool_name": "chat", "arguments": {}}
 
-User: "ありがとう"  ← Conversation (Japanese thanks)
+User: "thank you"
 → {"tool_name": "chat", "arguments": {}}
 
-User: "今何時ですか？"  ← Conversation (Japanese time query)
+User: "what time is it?" (no time-related tool available)
 → {"tool_name": "chat", "arguments": {}}
 
-User: "リビングのライトはついていますか？"  ← Status query (Japanese)
+User: "is the light on?" (GetLiveContext available)
 → {"tool_name": "GetLiveContext", "arguments": {}}
 
-User: "現在客廳的燈是亮著的嗎"  ← Status query (Chinese)
+User: "what's the temperature?" (GetLiveContext available)
 → {"tool_name": "GetLiveContext", "arguments": {}}
 
-User: "溫度是多少"  ← Status query (Chinese)
+User: "現在客廳燈是開著的嗎" (GetLiveContext available)
 → {"tool_name": "GetLiveContext", "arguments": {}}
-
-User: "set bedroom light to 50%"  ← Specific device
-Device: "names: Indirect light bedroom, domain: light"
-→ {"tool_name": "HassLightSet", "arguments": {"name": "Indirect light bedroom", "brightness": 50}}
-  NOTE: NO "area" field included!
 `.trim();
     
     console.log('[DEBUG] Starting extractToolSelection...');
     const startTime = Date.now();
     
     try {
-      const response = await this.sendPrompt(TOOL_SELECTION_PROMPT, userMessage, {
-        sessionTitle: 'tool-selection',
-        maxWaitMs: 30000,  // Increased from 15s to 30s
-      });
+      // Combine everything into the user message for better OpenCode compatibility
+      const fullPrompt = `${TOOL_SELECTION_PROMPT}
+
+Now, analyze this user request and respond with the JSON:
+User Request: "${userMessage}"`;
+      
+      const response = await this.sendPrompt(
+        "You are a tool selection expert. Respond with valid JSON only.",
+        fullPrompt,
+        {
+          sessionTitle: 'tool-selection',
+          maxWaitMs: 30000,
+        }
+      );
       
       const elapsed = Date.now() - startTime;
       console.log(`[DEBUG] extractToolSelection completed in ${elapsed}ms`);
@@ -288,128 +290,60 @@ Device: "names: Indirect light bedroom, domain: light"
   }
 
   /**
-   * Fallback rule-based tool selection when OpenCode fails
+   * Fallback tool selection when OpenCode is unavailable
+   * Returns "chat" to maintain service availability without assuming tool names
    */
-  private fallbackToolSelection(userMessage: string): string {
-    const msg = userMessage.toLowerCase();
+  private fallbackToolSelection(_userMessage: string): string {
+    console.log('[FALLBACK] OpenCode unavailable, returning conversational mode');
+    console.log('[FALLBACK] User will receive a graceful response instead of tool execution');
     
-    // Status query patterns
-    const statusPatterns = [
-      /是.*的嗎/, /現在.*嗎/, /.*狀態/, /.*如何/, /幾度/, /多少/,
-      /is.*on/, /is.*off/, /what.*temperature/, /how.*bright/,
-      /ついています/, /状態/, /温度/
-    ];
-    
-    const isStatusQuery = statusPatterns.some(pattern => pattern.test(msg));
-    
-    if (isStatusQuery) {
-      console.log('[FALLBACK] Detected status query → GetLiveContext');
-      return JSON.stringify({ tool_name: 'GetLiveContext', arguments: {} });
-    }
-    
-    // Control patterns
-    const turnOnPatterns = [/開/, /turn on/, /つけ/];
-    const turnOffPatterns = [/關/, /turn off/, /消/];
-    
-    if (turnOnPatterns.some(p => p.test(msg))) {
-      console.log('[FALLBACK] Detected turn on command → HassTurnOn');
-      // Extract device name (simplified)
-      return JSON.stringify({ tool_name: 'HassTurnOn', arguments: {} });
-    }
-    
-    if (turnOffPatterns.some(p => p.test(msg))) {
-      console.log('[FALLBACK] Detected turn off command → HassTurnOff');
-      return JSON.stringify({ tool_name: 'HassTurnOff', arguments: {} });
-    }
-    
-    // Default: treat as conversation
-    console.log('[FALLBACK] No pattern matched → chat');
-    return JSON.stringify({ tool_name: 'chat', arguments: {} });
+    // Always return "chat" - let conversation handler deal with the message
+    // This is safer than guessing which tools exist
+    return JSON.stringify({ 
+      tool_name: 'chat', 
+      arguments: {} 
+    });
   }
 
   /**
-   * Handle conversational requests (non-home-control)
-   * Responds naturally based on configuration and user's language
+   * Handle conversational requests
    * 
-   * @param userMessage - User's original message
+   * @param userMessage - User's message
+   * @param systemContext - Client's system prompt (from messages[0])
    * @returns Natural language response
    */
   async handleConversation(
-    userMessage: string
+    userMessage: string,
+    systemContext?: string
   ): Promise<string> {
     
-    // Determine tone from config
-    const toneInstructions = {
-      friendly: 'Respond in a friendly, warm, and helpful manner. Use casual language and emojis occasionally. Show enthusiasm when appropriate.',
-      professional: 'Respond in a professional and courteous manner. Be clear and concise. Avoid emojis and casual language.',
-      concise: 'Respond very briefly and directly. Use minimal words. No greetings or pleasantries unless specifically asked.',
-    };
+    // Use client's system context, or provide a minimal default
+    const conversationPrompt = systemContext || 
+      `You are a helpful AI assistant. Respond naturally and concisely.`;
     
-    const tone = toneInstructions[config.conversationTone as keyof typeof toneInstructions] || toneInstructions.friendly;
-    
-    // Determine language instructions
-    let languageInstructions = '';
-    if (config.conversationLanguage === 'auto') {
-      languageInstructions = `
-CRITICAL: Detect the language of the user's message and respond in THE SAME LANGUAGE.
-- If user speaks Chinese (Traditional or Simplified) → respond in Chinese
-- If user speaks Japanese → respond in Japanese  
-- If user speaks English → respond in English
-- Match the user's language exactly.
-`;
-    } else {
-      const languageMap = {
-        en: 'Respond in English.',
-        zh: 'Respond in Traditional Chinese (繁體中文).',
-        ja: 'Respond in Japanese (日本語).',
-      };
-      languageInstructions = languageMap[config.conversationLanguage as keyof typeof languageMap] || '';
-    }
-
-    // Get current time in JST
+    // Get current time in UTC (more universal)
     const now = new Date();
-    const jstTime = new Intl.DateTimeFormat('ja-JP', {
-      timeZone: 'Asia/Tokyo',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      weekday: 'long',
-    }).format(now);
+    const utcTime = now.toISOString();
 
-    const conversationPrompt = `You are a helpful and friendly smart home assistant for Home Assistant.
+    const fullPrompt = `${conversationPrompt}
 
-${tone}
-
-${languageInstructions}
-
-Current Date and Time (JST - Japan Standard Time):
-${jstTime}
-
-Available capabilities:
-- Answer general questions (time, date, simple facts)
-- Engage in friendly conversation
-- Help users understand what they can control
+Current Date and Time (UTC): ${utcTime}
 
 User: "${userMessage}"
 
 Instructions:
-1. If user asks about device status, politely explain that you cannot check live device status in conversation mode. Suggest they say the device control command directly (e.g., "Turn on the living room light").
-2. If user asks for time/date, use the "Current Date and Time" information provided above
-3. If user asks to control a device, politely guide them to say the control command directly
-4. Keep responses concise (1-3 sentences) unless user asks for detailed information
-5. Be helpful and natural
+1. Respond naturally and helpfully
+2. Keep responses concise (1-3 sentences) unless detailed information is requested
+3. If you don't have information to answer, politely explain your limitations
 
 Respond now:`;
 
     const response = await this.sendPrompt(
-      conversationPrompt,
+      fullPrompt,
       userMessage,
       {
         sessionTitle: 'conversation',
-        maxWaitMs: 30000,  // Increased from 15s to 30s
+        maxWaitMs: 30000,
       }
     );
 
