@@ -129,22 +129,16 @@ export async function createServer() {
             const opencodeService = getOpencodeService();
             
             // Create a prompt to generate answer based on tool result
-            const answerPrompt = `
-You are a helpful voice assistant for a smart home.
+            const answerPrompt = `${systemContext}
 
 User asked: ${userMessage}
 
-The smart home system returned this information:
+System Information:
 ${toolResultContent}
 
-Based on this information, generate a natural language answer to the user's question.
+Based on the system information above, answer the user's question naturally and concisely.
 
-CRITICAL: Detect the language of the user's question and respond in THE SAME LANGUAGE.
-- If user speaks Chinese (Traditional or Simplified) → respond in Chinese
-- If user speaks Japanese → respond in Japanese
-- If user speaks English → respond in English
-
-Keep your answer concise and friendly.
+CRITICAL: Detect the user's language and respond in the SAME language.
 `.trim();
 
             const answerResponse = await opencodeService.sendPrompt(
