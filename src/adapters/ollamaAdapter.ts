@@ -1,32 +1,15 @@
 /**
  * Ollama Adapter
- * Converts between Ollama API format and internal Intent format
+ * Converts between Ollama API format and internal ToolSelection format
  */
 
 import type { OllamaChatRequest, OllamaChatResponse, OllamaMessage, OllamaToolCall } from '../types/ollama.js';
-import type { Intent, IntentType } from '../types/intent.js';
-import { HA_TOOLS } from '../types/intent.js';
+import type { ToolSelection, ExtractionResult } from '../types/tool-selection.js';
 
 /**
- * Maps intent types to Home Assistant tool names
+ * Extract messages, tools, and detect repeated requests from Ollama chat request
  */
-const INTENT_TO_TOOL_MAP: Record<IntentType, string | null> = {
-  turn_on: HA_TOOLS.TURN_ON,
-  turn_off: HA_TOOLS.TURN_OFF,
-  set_temperature: HA_TOOLS.LIGHT_SET, // Climate uses generic set
-  set_brightness: HA_TOOLS.LIGHT_SET,
-  unknown: null,
-};
-
-/**
- * Extract messages from Ollama chat request
- * Returns system context, user message, and whether this is a repeated request
- */
-export function extractMessagesFromOllama(request: OllamaChatRequest): {
-  systemContext: string;
-  userMessage: string;
-  isRepeatedRequest: boolean;
-} {
+export function extractMessagesAndTools(request: OllamaChatRequest): ExtractionResult {
   let systemContext = '';
   let userMessage = '';
 
@@ -65,30 +48,30 @@ export function extractMessagesFromOllama(request: OllamaChatRequest): {
   return {
     systemContext: systemContext.trim(),
     userMessage: userMessage.trim(),
+    availableTools: request.tools || [],
     isRepeatedRequest,
   };
 }
 
 /**
- * Convert Intent to Ollama chat response format
+ * Convert tool selection to Ollama chat response format
  * 
  * Key differences from OpenAI:
  * - tool_calls.arguments is an Object, not a JSON string
  * - No tool_calls.id field
  * - Timing metadata in nanoseconds
  */
-export function convertIntentToOllama(
-  intent: Intent,
+export function convertToolSelectionToOllama(
+  toolSelection: ToolSelection,
   modelId: string,
   processingTimeMs: number
 ): OllamaChatResponse {
-  const toolName = INTENT_TO_TOOL_MAP[intent.intent];
-
-  // Handle unknown intent - return text response instead of tool call
-  if (!toolName || intent.intent === 'unknown' || (!intent.entity_id && !intent.device_name)) {
+  
+  // Handle unknown/invalid tool - return text response instead of tool call
+  if (toolSelection.tool_name === 'unknown' || !toolSelection.tool_name) {
     const message: OllamaMessage = {
       role: 'assistant',
-      content: "I'm sorry, I couldn't understand that command or find the device you mentioned. Please try again.",
+      content: "I'm sorry, I couldn't understand that command or find the appropriate action. Please try again.",
     };
 
     const totalDurationNs = processingTimeMs * 1_000_000;
@@ -105,46 +88,19 @@ export function convertIntentToOllama(
     };
   }
 
-  // Build tool call arguments
-  // CRITICAL: arguments must be an Object, not a JSON string
-  // Use device_name (friendly name) if available, otherwise fallback to entity_id
-  const toolArguments: Record<string, any> = {
-    name: intent.device_name || intent.entity_id,
-    domain: intent.domain,
-  };
-
-  // Add additional attributes if present
-  if (intent.attributes) {
-    Object.assign(toolArguments, intent.attributes);
-  }
-
+  // Build tool call
   const toolCall: OllamaToolCall = {
     function: {
-      name: toolName,
-      arguments: toolArguments, // Object, not JSON.stringify()!
-    },
+      name: toolSelection.tool_name,
+      arguments: toolSelection.arguments, // Object, not JSON.stringify()!
+    }
   };
 
-  // Generate a confirmation message based on the intent
-  let confirmationMessage = '';
-  const deviceName = intent.device_name || intent.entity_id || 'the device';
-  
-  switch (intent.intent) {
-    case 'turn_on':
-      confirmationMessage = `Turned on ${deviceName}`;
-      break;
-    case 'turn_off':
-      confirmationMessage = `Turned off ${deviceName}`;
-      break;
-    case 'set_brightness':
-      confirmationMessage = `Set ${deviceName} brightness to ${intent.attributes?.brightness}%`;
-      break;
-    case 'set_temperature':
-      confirmationMessage = `Set ${deviceName} temperature to ${intent.attributes?.temperature}°`;
-      break;
-    default:
-      confirmationMessage = `Executed command on ${deviceName}`;
-  }
+  // Generate confirmation message based on tool name
+  const confirmationMessage = generateConfirmationMessage(
+    toolSelection.tool_name,
+    toolSelection.arguments
+  );
 
   const message: OllamaMessage = {
     role: 'assistant',
@@ -152,10 +108,9 @@ export function convertIntentToOllama(
     tool_calls: [toolCall],
   };
 
-  // Convert processing time to nanoseconds
   const totalDurationNs = processingTimeMs * 1_000_000;
 
-  const response: OllamaChatResponse = {
+  return {
     model: modelId,
     created_at: new Date().toISOString(),
     message,
@@ -165,8 +120,59 @@ export function convertIntentToOllama(
     eval_count: 1,
     eval_duration: totalDurationNs,
   };
+}
 
-  return response;
+/**
+ * Generate human-friendly confirmation message based on tool name and arguments
+ */
+function generateConfirmationMessage(
+  toolName: string,
+  args: Record<string, any>
+): string {
+  const deviceName = args.name || args.area || args.entity_id || 'the device';
+  
+  // Pattern matching on tool names
+  if (toolName.includes('TurnOn')) {
+    return `Turned on ${deviceName}`;
+  } else if (toolName.includes('TurnOff')) {
+    return `Turned off ${deviceName}`;
+  } else if (toolName.includes('LightSet')) {
+    if (args.brightness !== undefined) {
+      return `Set ${deviceName} brightness to ${args.brightness}%`;
+    } else if (args.color !== undefined) {
+      return `Set ${deviceName} color`;
+    }
+    return `Adjusted ${deviceName}`;
+  } else if (toolName.includes('ClimateSetTemperature')) {
+    return `Set temperature to ${args.temperature}°`;
+  } else if (toolName.includes('MediaPause')) {
+    return `Paused ${deviceName}`;
+  } else if (toolName.includes('MediaUnpause')) {
+    return `Resumed ${deviceName}`;
+  } else if (toolName.includes('MediaNext')) {
+    return `Skipped to next on ${deviceName}`;
+  } else if (toolName.includes('MediaPrevious')) {
+    return `Went back to previous on ${deviceName}`;
+  } else if (toolName.includes('SetVolume')) {
+    return `Set volume to ${args.volume_level}% on ${deviceName}`;
+  } else if (toolName.includes('Mute')) {
+    return `Muted ${deviceName}`;
+  } else if (toolName.includes('Unmute')) {
+    return `Unmuted ${deviceName}`;
+  } else if (toolName.includes('ListAdd')) {
+    return `Added "${args.item}" to ${args.name}`;
+  } else if (toolName.includes('ListComplete')) {
+    return `Completed "${args.item}" on ${args.name}`;
+  } else if (toolName.includes('CancelAllTimers')) {
+    return `Cancelled all timers`;
+  } else if (toolName.includes('GetDateTime')) {
+    return `Getting current date and time`;
+  } else if (toolName.includes('GetLiveContext')) {
+    return `Getting live context`;
+  } else {
+    // Generic fallback
+    return `Executed ${toolName}`;
+  }
 }
 
 /**

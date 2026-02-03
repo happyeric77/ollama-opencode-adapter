@@ -2,6 +2,7 @@
 // Handles session-based communication with OpenCode server
 
 import { createOpencodeClient } from "@opencode-ai/sdk";
+import type { OllamaTool } from "../types/ollama.js";
 import { config } from "../config.js";
 
 export interface OpencodeMessage {
@@ -54,7 +55,7 @@ export class OpencodeService {
     if (!this.client) {
       throw new Error("OpencodeService not connected. Call connect() first.");
     }
-    // TDOOD: Why override options?
+    
     const {
       sessionTitle = "ha-ai-session",
       maxWaitMs = 30000,
@@ -135,106 +136,125 @@ export class OpencodeService {
   }
 
   /**
-   * Extract intent from HA messages (Context-Aware)
-   * Takes the full messages array from HA (including system context)
-   * Returns structured JSON response
+   * Extract tool selection from user message using available tools
+   * 
+   * @param haSystemContext - YAML device list from HA
+   * @param userMessage - User's command
+   * @param availableTools - Tools provided by HA
+   * @returns JSON string with tool selection
    */
-  async extractIntent(
+  async extractToolSelection(
     haSystemContext: string,
     userMessage: string,
+    availableTools: OllamaTool[]
   ): Promise<string> {
-    // Extract entity list from HA's system context
-    // HA sends devices in YAML format, not CSV!
-    let entityList = "";
+    
+    // Format tools into LLM-friendly description
+    const toolsDescription = formatToolsForLLM(availableTools);
+    
+    const TOOL_SELECTION_PROMPT = `You are a smart home assistant for Home Assistant.
 
-    // Try to extract YAML device list
-    const yamlMatch = haSystemContext.match(
-      /Static Context:[\s\S]*?(?=\n\n|$)/,
-    );
-    if (yamlMatch) {
-      entityList = yamlMatch[0];
-      console.log(
-        "[DEBUG] Extracted YAML entity list:",
-        entityList.substring(0, 500),
-      );
-    } else {
-      // TODO: Do we still need CSV??
-      // Fallback: try CSV format (for compatibility)
-      const csvMatch = haSystemContext.match(
-        /Available Devices:[\s\S]*?```csv\n([\s\S]*?)```/,
-      );
-      if (csvMatch && csvMatch[1]) {
-        entityList = csvMatch[1].trim();
-        console.log(
-          "[DEBUG] Extracted CSV entity list:",
-          entityList.substring(0, 500),
-        );
-      } else {
-        console.warn("[WARN] No device list found in HA system context");
-        console.log(
-          "[DEBUG] System context preview:",
-          haSystemContext.substring(0, 500),
-        );
-      }
-    }
-    // TODO: Why ignore HA's chat instructions? why not concatenate?
-    // Build our own system prompt (IGNORE HA's chat instructions)
-    const EXTRACTION_PROMPT = `You are a smart home intent extractor for Home Assistant.
+${haSystemContext}
 
-${entityList}
+Available actions you can perform:
+${toolsDescription}
 
-Your task: Extract the user's intent and return ONLY valid JSON.
+User request: "${userMessage}"
 
-CRITICAL: You MUST respond with VALID JSON ONLY. No explanations, no markdown, no code blocks, no conversation.
+CRITICAL: Respond with VALID JSON ONLY. No markdown, no explanations, no code blocks.
 
 Response Schema:
 {
-  "intent": "turn_on | turn_off | set_temperature | set_brightness | unknown",
-  "domain": "light | switch | climate | media_player | cover | fan | unknown",
-  "entity_id": "",
-  "device_name": "EXACT device name from 'names' field above (e.g., 'Light living room')",
-  "attributes": {}
+  "tool_name": "exact tool name from the available actions above",
+  "arguments": {
+    // parameters as defined in the tool schema
+    // Match the device from the context above
+    // Use exact device names from the 'names' field
+  }
 }
 
 Rules:
-1. Match the user's command to a device from the list above
-2. Extract the intent (turn_on, turn_off, etc.)
-3. Use the EXACT value from the "names:" field as device_name
-4. For the device "names: Light living room" with "domain: light", use device_name="Light living room" and domain="light"
-5. Return ONLY the JSON object, nothing else
-6. If you cannot determine the intent or find the device, return: {"intent": "unknown", "domain": "unknown", "entity_id": "", "device_name": ""}
+1. Choose the most appropriate tool from the list above
+2. Match the user's request to a device from the Static Context
+3. Use exact device names from the 'names' field (e.g., "Light living room")
+4. For parameters with type 'array', use array format (e.g., "domain": ["light"])
+5. CRITICAL - Parameter selection for device control (HassTurnOn, HassTurnOff, etc.):
+   - If targeting a SPECIFIC DEVICE by name → use ONLY "name" + "domain" (do NOT include "area")
+   - If targeting ALL DEVICES in an area → use ONLY "area" + "domain" (do NOT include "name")
+   - NEVER include both "area" and "name" in the same request
+6. If you cannot determine the appropriate tool or device, return:
+   {"tool_name": "unknown", "arguments": {}}
 
 Examples:
-User: "開啟客廳的燈" (turn on living room light)
+User: "turn on living room light"  ← Specific device
 Device: "names: Light living room, domain: light"
-Response: {"intent": "turn_on", "domain": "light", "entity_id": "", "device_name": "Light living room", "attributes": {}}
+→ {"tool_name": "HassTurnOn", "arguments": {"name": "Light living room", "domain": ["light"]}}
+  NOTE: NO "area" field included!
 
-User: "turn off bedroom ceiling light"
-Device: "names: Ceiling light bedroom, domain: switch"
-Response: {"intent": "turn_off", "domain": "switch", "entity_id": "", "device_name": "Ceiling light bedroom", "attributes": {}}
+User: "turn off all living room lights"  ← All devices in area
+→ {"tool_name": "HassTurnOff", "arguments": {"area": "Living Room", "domain": ["light"]}}
+  NOTE: NO "name" field included!
 
-User: "set bedroom light to 50 percent"
+User: "set bedroom light to 50%"  ← Specific device
 Device: "names: Indirect light bedroom, domain: light"
-Response: {"intent": "set_brightness", "domain": "light", "entity_id": "", "device_name": "Indirect light bedroom", "attributes": {"brightness": 50}}`;
+→ {"tool_name": "HassLightSet", "arguments": {"name": "Indirect light bedroom", "brightness": 50}}
+  NOTE: NO "area" field included!
 
-    const response = await this.sendPrompt(EXTRACTION_PROMPT, userMessage, {
-      sessionTitle: "intent-extraction",
+User: "play music"
+Device: "names: Speaker living room, domain: media_player"
+→ {"tool_name": "HassMediaSearchAndPlay", "arguments": {"search_query": "music", "name": "Speaker living room"}}
+
+User: "what time is it?"
+→ {"tool_name": "GetDateTime", "arguments": {}}
+`.trim();
+    
+    const response = await this.sendPrompt(TOOL_SELECTION_PROMPT, userMessage, {
+      sessionTitle: 'tool-selection',
       maxWaitMs: 15000,
     });
-
-    // Remove potential markdown code blocks
+    
+    // Clean markdown code blocks
     const cleaned = response.content
       .trim()
-      .replace(/```json\n?/g, "")
-      .replace(/```\n?/g, "")
+      .replace(/```json\n?/g, '')
+      .replace(/```\n?/g, '')
       .trim();
-
+    
     return cleaned;
   }
 
   isConnected(): boolean {
     return this.client !== null;
   }
+}
+
+/**
+ * Format tools into LLM-friendly text description
+ */
+function formatToolsForLLM(tools: OllamaTool[]): string {
+  return tools.map((tool, index) => {
+    const func = tool.function;
+    const params = func.parameters;
+    const requiredParams = params.required || [];
+    
+    // Format parameters
+    const paramsText = Object.entries(params.properties || {})
+      .map(([key, schema]: [string, any]) => {
+        const required = requiredParams.includes(key) ? ' (required)' : '';
+        const desc = schema.description ? ` - ${schema.description}` : '';
+        const type = schema.type || 'any';
+        const itemsType = schema.items?.type ? `<${schema.items.type}>` : '';
+        return `  - ${key}${required}: ${type}${itemsType}${desc}`;
+      })
+      .join('\n');
+    
+    return `
+${index + 1}. ${func.name}
+   Description: ${func.description}
+   Parameters:
+${paramsText || '   (no parameters)'}
+    `.trim();
+  }).join('\n\n');
 }
 
 // Singleton instance
