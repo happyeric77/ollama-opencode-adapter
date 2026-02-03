@@ -66,6 +66,45 @@ Currently, device status queries are handled conversationally. Could add:
 
 ---
 
+### 5. API Key Authentication
+**Priority**: Low  
+**Status**: Not started
+
+Add optional API key authentication to secure the adapter endpoints.
+
+**Features**:
+- Optional bearer token authentication
+- Configurable via `API_KEY` environment variable
+- Protection for public-facing deployments
+
+**Implementation Notes**:
+```typescript
+// In server.ts
+if (config.apiKey) {
+  fastify.addHook('preHandler', async (request, reply) => {
+    const authHeader = request.headers.authorization;
+    if (!authHeader || authHeader !== `Bearer ${config.apiKey}`) {
+      reply.code(401).send({ error: 'Unauthorized' });
+    }
+  });
+}
+```
+
+**Configuration**:
+```bash
+# .env
+API_KEY=your-secret-key-here
+```
+
+**Use Case**: 
+- When adapter is exposed to public internet
+- Multi-user scenarios requiring access control
+- Integration with external systems
+
+**Estimated Effort**: 2-3 hours
+
+---
+
 ## 📝 Notes
 
 Add future enhancement ideas here as they come up during development and usage.
