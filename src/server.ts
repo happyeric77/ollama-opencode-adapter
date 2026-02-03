@@ -79,30 +79,6 @@ export async function createServer() {
           toolResultContent,
         } = extractMessagesAndTools(body);
 
-        // Debug: log tools from HA
-        console.log("\n[DEBUG] Request tools from HA:");
-        console.log("Tools count:", availableTools.length);
-        if (availableTools.length > 0) {
-          console.log(
-            "Tool names:",
-            availableTools.map((t) => t.function.name).join(", "),
-          );
-        }
-        console.log("\n");
-
-        // Debug: log message history
-        console.log("\n[DEBUG] Message history from HA:");
-        console.log("Total messages:", body.messages.length);
-        body.messages.slice(-5).forEach((msg, i) => {
-          console.log(`Message ${i}:`, {
-            role: msg.role,
-            content: msg.content?.substring(0, 100),
-            has_tool_calls: !!msg.tool_calls,
-            tool_calls_count: msg.tool_calls?.length || 0,
-          });
-        });
-        console.log("\n");
-
         if (!userMessage) {
           return reply.code(400).send({
             error: "At least one user message is required",
@@ -220,9 +196,6 @@ CRITICAL: Detect the user's language and respond in the SAME language.
             );
         }
 
-        // Debug: log full system context to console
-        console.log("\n[DEBUG] Full system context:\n", systemContext, "\n");
-
         // Extract tool selection using OpenCode
         const opencodeService = getOpencodeService();
         const toolSelectionStr = await opencodeService.extractToolSelection(
@@ -322,11 +295,6 @@ CRITICAL: Detect the user's language and respond in the SAME language.
         );
 
         fastify.log.info({ response }, "Sending Ollama response");
-
-        // Debug: log full response as JSON string
-        console.log("\n[DEBUG] Full Ollama response being sent to HA:");
-        console.log(JSON.stringify(response, null, 2));
-        console.log("\n");
 
         return reply.code(200).send(response);
       } catch (err) {

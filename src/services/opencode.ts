@@ -63,7 +63,6 @@ export class OpencodeService {
     } = options;
 
     // Create session
-    console.log(`[DEBUG sendPrompt] Creating session: ${sessionTitle}...`);
     const session = await this.client.session.create({
       body: { title: sessionTitle },
     });
@@ -72,13 +71,11 @@ export class OpencodeService {
     if (!sessionId) {
       throw new Error("Failed to create OpenCode session");
     }
-    console.log(`[DEBUG sendPrompt] Session created: ${sessionId}`);
 
     try {
       const startTime = Date.now();
 
       // Send prompt with timeout
-      console.log(`[DEBUG sendPrompt] Sending prompt to session ${sessionId}...`);
       const promptPromise = this.client.session.prompt({
         path: { id: sessionId },
         body: {
@@ -98,8 +95,6 @@ export class OpencodeService {
       
       await Promise.race([promptPromise, promptTimeoutPromise]);
 
-      console.log(`[DEBUG sendPrompt] Prompt sent for session ${sessionId}, waiting for response...`);
-
       // Poll for assistant response
       let assistantContent: string | null = null;
       let pollCount = 0;
@@ -113,11 +108,6 @@ export class OpencodeService {
         const assistantMsgs =
           messages.data?.filter((m: any) => m.info?.role === "assistant") || [];
 
-        // Log every 10 polls
-        if (pollCount % 10 === 0) {
-          console.log(`[DEBUG sendPrompt] Poll #${pollCount}: ${assistantMsgs.length} assistant messages, elapsed ${Date.now() - startTime}ms`);
-        }
-
         // Get the last assistant message
         const lastAssistant = assistantMsgs[assistantMsgs.length - 1];
 
@@ -127,7 +117,6 @@ export class OpencodeService {
           );
           if (textPart?.text) {
             assistantContent = textPart.text;
-            console.log(`[DEBUG sendPrompt] Got response after ${pollCount} polls, ${Date.now() - startTime}ms`);
             break;
           }
         }
@@ -138,7 +127,6 @@ export class OpencodeService {
       const elapsed = Date.now() - startTime;
 
       if (!assistantContent) {
-        console.log(`[DEBUG sendPrompt] TIMEOUT after ${pollCount} polls, ${elapsed}ms`);
         throw new Error(`OpenCode response timeout after ${maxWaitMs}ms`);
       }
 
@@ -250,7 +238,6 @@ User: "現在客廳燈是開著的嗎" (GetLiveContext available)
 `.trim();
     
     console.log('[DEBUG] Starting extractToolSelection...');
-    const startTime = Date.now();
     
     try {
       // Combine everything into the user message for better OpenCode compatibility
@@ -268,9 +255,6 @@ User Request: "${userMessage}"`;
         }
       );
       
-      const elapsed = Date.now() - startTime;
-      console.log(`[DEBUG] extractToolSelection completed in ${elapsed}ms`);
-      
       // Clean markdown code blocks
       const cleaned = response.content
         .trim()
@@ -280,9 +264,8 @@ User Request: "${userMessage}"`;
       
       return cleaned;
     } catch (err) {
-      const elapsed = Date.now() - startTime;
-      console.error(`[ERROR] extractToolSelection failed after ${elapsed}ms:`, err instanceof Error ? err.message : err);
-      console.log('[FALLBACK] Using rule-based tool selection...');
+      console.error('[ERROR] extractToolSelection failed:', err instanceof Error ? err.message : err);
+      console.log('[FALLBACK] Returning conversational mode');
       
       // Fallback: Use simple rule-based tool selection
       return this.fallbackToolSelection(userMessage);
@@ -294,9 +277,6 @@ User Request: "${userMessage}"`;
    * Returns "chat" to maintain service availability without assuming tool names
    */
   private fallbackToolSelection(_userMessage: string): string {
-    console.log('[FALLBACK] OpenCode unavailable, returning conversational mode');
-    console.log('[FALLBACK] User will receive a graceful response instead of tool execution');
-    
     // Always return "chat" - let conversation handler deal with the message
     // This is safer than guessing which tools exist
     return JSON.stringify({ 

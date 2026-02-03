@@ -33,10 +33,6 @@ export function extractMessagesAndTools(request: OllamaChatRequest): ExtractionR
     const lastMsg = request.messages[request.messages.length - 1];
     const secondLastMsg = request.messages[request.messages.length - 2];
     
-    console.log('[DEBUG] Checking for repeated request:');
-    console.log('Last msg:', { role: lastMsg?.role, content: lastMsg?.content?.substring(0, 50) });
-    console.log('Second last:', { role: secondLastMsg?.role, has_tool_calls: !!secondLastMsg?.tool_calls, tool_calls_count: secondLastMsg?.tool_calls?.length || 0 });
-    
     // If last message is 'tool' result and second last is our assistant response with tool_calls
     // This means HA executed the tool and is asking us again
     if (lastMsg?.role === 'tool' &&
@@ -50,13 +46,11 @@ export function extractMessagesAndTools(request: OllamaChatRequest): ExtractionR
       
       if (toolName && queryTools.includes(toolName)) {
         // This is a query tool - we need to use the result to answer the user
-        console.log(`[DEBUG] Tool "${toolName}" is a query tool - NOT treating as repeated request`);
         isRepeatedRequest = false;
         hasQueryToolResult = true;
         toolResultContent = lastMsg.content;
       } else {
         // This is a control tool - already executed, treat as repeated request
-        console.log(`[DEBUG] Tool "${toolName || 'unknown'}" is a control tool - treating as repeated request`);
         isRepeatedRequest = true;
       }
     }
