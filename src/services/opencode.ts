@@ -205,8 +205,9 @@ Rules for Intent Detection (Priority Order):
    → Extract parameter values from the user's request
    
 2. INFORMATION QUERY (user asks about status, state, or information)
-   → Look for query-type tools in the available tools list
+   → CRITICAL: Look for query-type tools in the available tools list
    → Query tools often have names like "Get*", "Query*", "Fetch*", "*Status", "*Context"
+   → IMPORTANT: Status questions like "is X on?", "what's the status?", "is X open?" MUST use query tools
    → If a query tool exists, use it with appropriate parameters
    → If no query tool exists, return: {"tool_name": "chat", "arguments": {}}
    
@@ -227,7 +228,7 @@ Handling Ambiguity:
 - If user asks for information but no query tool exists: {"tool_name": "chat", "arguments": {}}
 - When in doubt between action and conversation: prefer "chat"
 
-Generic Examples:
+Examples:
 
 User: "hello"
 → {"tool_name": "chat", "arguments": {}}
@@ -237,6 +238,15 @@ User: "thank you"
 
 User: "what time is it?" (no time-related tool available)
 → {"tool_name": "chat", "arguments": {}}
+
+User: "is the light on?" (GetLiveContext available)
+→ {"tool_name": "GetLiveContext", "arguments": {}}
+
+User: "what's the temperature?" (GetLiveContext available)
+→ {"tool_name": "GetLiveContext", "arguments": {}}
+
+User: "現在客廳燈是開著的嗎" (GetLiveContext available)
+→ {"tool_name": "GetLiveContext", "arguments": {}}
 `.trim();
     
     console.log('[DEBUG] Starting extractToolSelection...');
