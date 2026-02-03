@@ -328,88 +328,44 @@ Device: "names: Indirect light bedroom, domain: light"
   }
 
   /**
-   * Handle conversational requests (non-home-control)
-   * Responds naturally based on configuration and user's language
+   * Handle conversational requests
    * 
-   * @param userMessage - User's original message
+   * @param userMessage - User's message
+   * @param systemContext - Client's system prompt (from messages[0])
    * @returns Natural language response
    */
   async handleConversation(
-    userMessage: string
+    userMessage: string,
+    systemContext?: string
   ): Promise<string> {
     
-    // Determine tone from config
-    const toneInstructions = {
-      friendly: 'Respond in a friendly, warm, and helpful manner. Use casual language and emojis occasionally. Show enthusiasm when appropriate.',
-      professional: 'Respond in a professional and courteous manner. Be clear and concise. Avoid emojis and casual language.',
-      concise: 'Respond very briefly and directly. Use minimal words. No greetings or pleasantries unless specifically asked.',
-    };
+    // Use client's system context, or provide a minimal default
+    const conversationPrompt = systemContext || 
+      `You are a helpful AI assistant. Respond naturally and concisely.`;
     
-    const tone = toneInstructions[config.conversationTone as keyof typeof toneInstructions] || toneInstructions.friendly;
-    
-    // Determine language instructions
-    let languageInstructions = '';
-    if (config.conversationLanguage === 'auto') {
-      languageInstructions = `
-CRITICAL: Detect the language of the user's message and respond in THE SAME LANGUAGE.
-- If user speaks Chinese (Traditional or Simplified) → respond in Chinese
-- If user speaks Japanese → respond in Japanese  
-- If user speaks English → respond in English
-- Match the user's language exactly.
-`;
-    } else {
-      const languageMap = {
-        en: 'Respond in English.',
-        zh: 'Respond in Traditional Chinese (繁體中文).',
-        ja: 'Respond in Japanese (日本語).',
-      };
-      languageInstructions = languageMap[config.conversationLanguage as keyof typeof languageMap] || '';
-    }
-
-    // Get current time in JST
+    // Get current time in UTC (more universal)
     const now = new Date();
-    const jstTime = new Intl.DateTimeFormat('ja-JP', {
-      timeZone: 'Asia/Tokyo',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      weekday: 'long',
-    }).format(now);
+    const utcTime = now.toISOString();
 
-    const conversationPrompt = `You are a helpful and friendly smart home assistant for Home Assistant.
+    const fullPrompt = `${conversationPrompt}
 
-${tone}
-
-${languageInstructions}
-
-Current Date and Time (JST - Japan Standard Time):
-${jstTime}
-
-Available capabilities:
-- Answer general questions (time, date, simple facts)
-- Engage in friendly conversation
-- Help users understand what they can control
+Current Date and Time (UTC): ${utcTime}
 
 User: "${userMessage}"
 
 Instructions:
-1. If user asks about device status, politely explain that you cannot check live device status in conversation mode. Suggest they say the device control command directly (e.g., "Turn on the living room light").
-2. If user asks for time/date, use the "Current Date and Time" information provided above
-3. If user asks to control a device, politely guide them to say the control command directly
-4. Keep responses concise (1-3 sentences) unless user asks for detailed information
-5. Be helpful and natural
+1. Respond naturally and helpfully
+2. Keep responses concise (1-3 sentences) unless detailed information is requested
+3. If you don't have information to answer, politely explain your limitations
 
 Respond now:`;
 
     const response = await this.sendPrompt(
-      conversationPrompt,
+      fullPrompt,
       userMessage,
       {
         sessionTitle: 'conversation',
-        maxWaitMs: 30000,  // Increased from 15s to 30s
+        maxWaitMs: 30000,
       }
     );
 

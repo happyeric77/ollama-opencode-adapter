@@ -265,7 +265,8 @@ Keep your answer concise and friendly.
           
           try {
             const chatResponse = await opencodeService.handleConversation(
-              userMessage
+              userMessage,
+              systemContext  // Pass client's system context
             );
             
             const processingTimeMs = Date.now() - startTime;
