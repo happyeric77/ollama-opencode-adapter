@@ -75,6 +75,8 @@ export async function createServer() {
           userMessage,
           availableTools,
           isRepeatedRequest,
+          hasQueryToolResult,
+          toolResultContent,
         } = extractMessagesAndTools(body);
 
         // Debug: log tools from HA
@@ -113,9 +115,78 @@ export async function createServer() {
             userMessage,
             toolsAvailable: availableTools.length,
             isRepeatedRequest,
+            hasQueryToolResult,
           },
           "Extracted context and user message",
         );
+
+        // ============ Handle query tool results ============
+        // If this is a query tool result (e.g., GetLiveContext), generate answer using the result
+        if (hasQueryToolResult && toolResultContent) {
+          fastify.log.info("Detected query tool result, generating answer from tool result");
+          
+          try {
+            const opencodeService = getOpencodeService();
+            
+            // Create a prompt to generate answer based on tool result
+            const answerPrompt = `
+You are a helpful voice assistant for a smart home.
+
+User asked: ${userMessage}
+
+The smart home system returned this information:
+${toolResultContent}
+
+Based on this information, generate a natural language answer to the user's question.
+
+CRITICAL: Detect the language of the user's question and respond in THE SAME LANGUAGE.
+- If user speaks Chinese (Traditional or Simplified) → respond in Chinese
+- If user speaks Japanese → respond in Japanese
+- If user speaks English → respond in English
+
+Keep your answer concise and friendly.
+`.trim();
+
+            const answerResponse = await opencodeService.sendPrompt(
+              answerPrompt,
+              userMessage,
+              {
+                sessionTitle: 'query-tool-answer',
+                maxWaitMs: 30000,  // Increased from 15s to 30s
+              }
+            );
+            
+            const processingTimeMs = Date.now() - startTime;
+            const totalDurationNs = processingTimeMs * 1_000_000;
+            
+            const response: OllamaChatResponse = {
+              model: body.model || config.modelId,
+              created_at: new Date().toISOString(),
+              message: {
+                role: 'assistant',
+                content: answerResponse.content.trim(),
+              },
+              done: true,
+              done_reason: 'stop',
+              total_duration: totalDurationNs,
+              eval_count: 1,
+              eval_duration: totalDurationNs,
+            };
+            
+            fastify.log.info({ answer: answerResponse.content }, "Generated answer from tool result");
+            return reply.code(200).send(response);
+          } catch (err) {
+            fastify.log.error({ 
+              error: err instanceof Error ? {
+                message: err.message,
+                stack: err.stack,
+                name: err.name,
+              } : err 
+            }, "Error generating answer from tool result");
+            // Fall through to normal error handling
+          }
+        }
+        // ============ End query tool result handling ============
 
         // If this is a repeated request (HA is retrying after tool execution), return acknowledgment
         if (isRepeatedRequest) {
@@ -188,12 +259,53 @@ export async function createServer() {
           };
         }
 
+        // ============ Handle conversational requests ============
+        if (toolSelection.tool_name === "chat") {
+          fastify.log.info("Detected conversational request, generating chat response");
+          
+          try {
+            const chatResponse = await opencodeService.handleConversation(
+              userMessage
+            );
+            
+            const processingTimeMs = Date.now() - startTime;
+            const totalDurationNs = processingTimeMs * 1_000_000;
+            
+            const response: OllamaChatResponse = {
+              model: body.model || config.modelId,
+              created_at: new Date().toISOString(),
+              message: {
+                role: 'assistant',
+                content: chatResponse,
+              },
+              done: true,
+              done_reason: 'stop',
+              total_duration: totalDurationNs,
+              eval_count: 1,
+              eval_duration: totalDurationNs,
+            };
+            
+            fastify.log.info({ response: chatResponse }, "Sending chat response");
+            return reply.code(200).send(response);
+          } catch (err) {
+            fastify.log.error({ 
+              error: err instanceof Error ? {
+                message: err.message,
+                stack: err.stack,
+                name: err.name,
+              } : err 
+            }, "Error generating chat response");
+            // Fall through to normal error handling
+          }
+        }
+        // ============ End conversational handling ============
+
         // Validate tool_name against available tools
         const isValidTool = availableTools.some(
           (t) => t.function.name === toolSelection.tool_name,
         );
 
-        if (!isValidTool && toolSelection.tool_name !== "unknown") {
+        if (!isValidTool && toolSelection.tool_name !== "unknown" && toolSelection.tool_name !== "chat") {
           fastify.log.warn(
             {
               selected: toolSelection.tool_name,
@@ -223,7 +335,13 @@ export async function createServer() {
 
         return reply.code(200).send(response);
       } catch (err) {
-        fastify.log.error({ error: err }, "Error processing chat request");
+        fastify.log.error({ 
+          error: err instanceof Error ? {
+            message: err.message,
+            stack: err.stack,
+            name: err.name,
+          } : err 
+        }, "Error processing chat request");
 
         const errorResponse = convertErrorToOllama(
           err instanceof Error ? err : new Error("Internal server error"),

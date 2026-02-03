@@ -24,7 +24,10 @@ export function extractMessagesAndTools(request: OllamaChatRequest): ExtractionR
   // Check for repeated request pattern
   // HA sends: [..., assistant (with tool_calls), tool, assistant (with tool_calls), tool, ...]
   // If the LAST message is 'tool' and the one before it is assistant with tool_calls, it's a repeat
+  // BUT: We should allow query tools (GetLiveContext, GetDateTime, etc.) to proceed for answering
   let isRepeatedRequest = false;
+  let hasQueryToolResult = false;
+  let toolResultContent: string | undefined;
   
   if (request.messages.length >= 2) {
     const lastMsg = request.messages[request.messages.length - 1];
@@ -35,13 +38,27 @@ export function extractMessagesAndTools(request: OllamaChatRequest): ExtractionR
     console.log('Second last:', { role: secondLastMsg?.role, has_tool_calls: !!secondLastMsg?.tool_calls, tool_calls_count: secondLastMsg?.tool_calls?.length || 0 });
     
     // If last message is 'tool' result and second last is our assistant response with tool_calls
-    // This means HA executed the tool and is asking us again (循環)
+    // This means HA executed the tool and is asking us again
     if (lastMsg?.role === 'tool' &&
         secondLastMsg?.role === 'assistant' && 
         secondLastMsg.tool_calls && 
         secondLastMsg.tool_calls.length > 0) {
-      isRepeatedRequest = true;
-      console.log('[DEBUG] DETECTED REPEATED REQUEST! (pattern: assistant+tool_calls -> tool)');
+      
+      // Check if the tool was a QUERY tool (needs answer) or CONTROL tool (already done)
+      const toolName = secondLastMsg.tool_calls[0]?.function?.name;
+      const queryTools = ['GetLiveContext', 'GetDateTime', 'todo_get_items'];
+      
+      if (toolName && queryTools.includes(toolName)) {
+        // This is a query tool - we need to use the result to answer the user
+        console.log(`[DEBUG] Tool "${toolName}" is a query tool - NOT treating as repeated request`);
+        isRepeatedRequest = false;
+        hasQueryToolResult = true;
+        toolResultContent = lastMsg.content;
+      } else {
+        // This is a control tool - already executed, treat as repeated request
+        console.log(`[DEBUG] Tool "${toolName || 'unknown'}" is a control tool - treating as repeated request`);
+        isRepeatedRequest = true;
+      }
     }
   }
 
@@ -50,6 +67,8 @@ export function extractMessagesAndTools(request: OllamaChatRequest): ExtractionR
     userMessage: userMessage.trim(),
     availableTools: request.tools || [],
     isRepeatedRequest,
+    hasQueryToolResult,
+    toolResultContent,
   };
 }
 
@@ -71,7 +90,7 @@ export function convertToolSelectionToOllama(
   if (toolSelection.tool_name === 'unknown' || !toolSelection.tool_name) {
     const message: OllamaMessage = {
       role: 'assistant',
-      content: "I'm sorry, I couldn't understand that command or find the appropriate action. Please try again.",
+      content: "申し訳ございません。デバイスまたはアクションが見つかりませんでした。リクエストを言い換えるか、デバイス名を確認していただけますか？例えば「リビングのライトをつけて」や「音量を50に設定」のように言ってみてください。",
     };
 
     const totalDurationNs = processingTimeMs * 1_000_000;

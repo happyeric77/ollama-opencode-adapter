@@ -183,7 +183,7 @@ describe('Ollama Adapter - Tool Selection', () => {
 
       const response = convertToolSelectionToOllama(toolSelection, 'gpt-4o', 100);
 
-      expect(response.message.content).toContain('couldn\'t understand');
+      expect(response.message.content).toContain('申し訳ございません');
       expect(response.message.tool_calls).toBeUndefined();
       expect(response.done).toBe(true);
     });

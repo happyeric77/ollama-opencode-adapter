@@ -63,6 +63,7 @@ export class OpencodeService {
     } = options;
 
     // Create session
+    console.log(`[DEBUG sendPrompt] Creating session: ${sessionTitle}...`);
     const session = await this.client.session.create({
       body: { title: sessionTitle },
     });
@@ -71,12 +72,14 @@ export class OpencodeService {
     if (!sessionId) {
       throw new Error("Failed to create OpenCode session");
     }
+    console.log(`[DEBUG sendPrompt] Session created: ${sessionId}`);
 
     try {
       const startTime = Date.now();
 
-      // Send prompt
-      await this.client.session.prompt({
+      // Send prompt with timeout
+      console.log(`[DEBUG sendPrompt] Sending prompt to session ${sessionId}...`);
+      const promptPromise = this.client.session.prompt({
         path: { id: sessionId },
         body: {
           model: {
@@ -87,17 +90,33 @@ export class OpencodeService {
           parts: [{ type: "text", text: userMessage }],
         },
       });
+      
+      // Add timeout to prompt call itself (10 seconds)
+      const promptTimeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('session.prompt() timeout after 10s')), 10000)
+      );
+      
+      await Promise.race([promptPromise, promptTimeoutPromise]);
+
+      console.log(`[DEBUG sendPrompt] Prompt sent for session ${sessionId}, waiting for response...`);
 
       // Poll for assistant response
       let assistantContent: string | null = null;
+      let pollCount = 0;
 
       while (Date.now() - startTime < maxWaitMs) {
+        pollCount++;
         const messages = await this.client.session.messages({
           path: { id: sessionId },
         });
 
         const assistantMsgs =
           messages.data?.filter((m: any) => m.info?.role === "assistant") || [];
+
+        // Log every 10 polls
+        if (pollCount % 10 === 0) {
+          console.log(`[DEBUG sendPrompt] Poll #${pollCount}: ${assistantMsgs.length} assistant messages, elapsed ${Date.now() - startTime}ms`);
+        }
 
         // Get the last assistant message
         const lastAssistant = assistantMsgs[assistantMsgs.length - 1];
@@ -108,6 +127,7 @@ export class OpencodeService {
           );
           if (textPart?.text) {
             assistantContent = textPart.text;
+            console.log(`[DEBUG sendPrompt] Got response after ${pollCount} polls, ${Date.now() - startTime}ms`);
             break;
           }
         }
@@ -118,6 +138,7 @@ export class OpencodeService {
       const elapsed = Date.now() - startTime;
 
       if (!assistantContent) {
+        console.log(`[DEBUG sendPrompt] TIMEOUT after ${pollCount} polls, ${elapsed}ms`);
         throw new Error(`OpenCode response timeout after ${maxWaitMs}ms`);
       }
 
@@ -126,11 +147,15 @@ export class OpencodeService {
         elapsed,
       };
     } finally {
-      // Always cleanup session
+      // Always cleanup session (with timeout to prevent hanging)
       try {
-        await this.client.session.delete({ path: { id: sessionId } });
+        const deletePromise = this.client.session.delete({ path: { id: sessionId } });
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Session delete timeout')), 5000)
+        );
+        await Promise.race([deletePromise, timeoutPromise]);
       } catch (err) {
-        console.error("Failed to delete OpenCode session:", err);
+        console.error(`Failed to delete OpenCode session ${sessionId}:`, err instanceof Error ? err.message : err);
       }
     }
   }
@@ -165,28 +190,41 @@ CRITICAL: Respond with VALID JSON ONLY. No markdown, no explanations, no code bl
 
 Response Schema:
 {
-  "tool_name": "exact tool name from the available actions above",
+  "tool_name": "exact tool name from the available actions above OR 'chat' for conversation",
   "arguments": {
-    // parameters as defined in the tool schema
-    // Match the device from the context above
-    // Use exact device names from the 'names' field
+    // parameters as defined in the tool schema (only if tool_name is not 'chat')
   }
 }
 
 Rules:
-1. Choose the most appropriate tool from the list above
-2. Match the user's request to a device from the Static Context
-3. Use exact device names from the 'names' field (e.g., "Light living room")
-4. For parameters with type 'array', use array format (e.g., "domain": ["light"])
-5. CRITICAL - Parameter selection for device control (HassTurnOn, HassTurnOff, etc.):
+1. DETERMINE REQUEST TYPE (CRITICAL - ALWAYS return valid JSON):
+   a) If the user wants to CONTROL HOME DEVICES (turn on/off, set brightness, change temperature, etc.):
+      → Choose appropriate tool from the list above
+   
+   b) If the user asks about DEVICE STATUS or STATE (is X on/off, what's the temperature, is X open/closed):
+      → Use GetLiveContext tool if available
+      → Return: {"tool_name": "GetLiveContext", "arguments": {}}
+      → Examples: "is the light on?", "what's the temperature?", "is the door locked?"
+   
+   c) If the user is having a CONVERSATION (greeting, question, chat, general inquiry):
+      → MUST return: {"tool_name": "chat", "arguments": {}}
+      → Examples: "hello", "how are you", "thank you", "what time is it", "tell me a joke"
+
+2. For HOME DEVICE CONTROL requests:
+   - Match device names exactly from the Static Context above
+   - Use exact device names from 'names' field (e.g., "Light living room")
+   - For parameters with type 'array', use array format (e.g., "domain": ["light"])
+   
+3. CRITICAL - Parameter selection for device control:
    - If targeting a SPECIFIC DEVICE by name → use ONLY "name" + "domain" (do NOT include "area")
    - If targeting ALL DEVICES in an area → use ONLY "area" + "domain" (do NOT include "name")
    - NEVER include both "area" and "name" in the same request
-6. If you cannot determine the appropriate tool or device, return:
-   {"tool_name": "unknown", "arguments": {}}
+
+4. If you cannot determine which tool to use for a HOME CONTROL request:
+   - Return: {"tool_name": "unknown", "arguments": {}}
 
 Examples:
-User: "turn on living room light"  ← Specific device
+User: "turn on living room light"  ← Home control
 Device: "names: Light living room, domain: light"
 → {"tool_name": "HassTurnOn", "arguments": {"name": "Light living room", "domain": ["light"]}}
   NOTE: NO "area" field included!
@@ -195,32 +233,187 @@ User: "turn off all living room lights"  ← All devices in area
 → {"tool_name": "HassTurnOff", "arguments": {"area": "Living Room", "domain": ["light"]}}
   NOTE: NO "name" field included!
 
+User: "こんにちは"  ← Conversation (Japanese greeting)
+→ {"tool_name": "chat", "arguments": {}}
+
+User: "ありがとう"  ← Conversation (Japanese thanks)
+→ {"tool_name": "chat", "arguments": {}}
+
+User: "今何時ですか？"  ← Conversation (Japanese time query)
+→ {"tool_name": "chat", "arguments": {}}
+
+User: "リビングのライトはついていますか？"  ← Status query (Japanese)
+→ {"tool_name": "GetLiveContext", "arguments": {}}
+
+User: "現在客廳的燈是亮著的嗎"  ← Status query (Chinese)
+→ {"tool_name": "GetLiveContext", "arguments": {}}
+
+User: "溫度是多少"  ← Status query (Chinese)
+→ {"tool_name": "GetLiveContext", "arguments": {}}
+
 User: "set bedroom light to 50%"  ← Specific device
 Device: "names: Indirect light bedroom, domain: light"
 → {"tool_name": "HassLightSet", "arguments": {"name": "Indirect light bedroom", "brightness": 50}}
   NOTE: NO "area" field included!
-
-User: "play music"
-Device: "names: Speaker living room, domain: media_player"
-→ {"tool_name": "HassMediaSearchAndPlay", "arguments": {"search_query": "music", "name": "Speaker living room"}}
-
-User: "what time is it?"
-→ {"tool_name": "GetDateTime", "arguments": {}}
 `.trim();
     
-    const response = await this.sendPrompt(TOOL_SELECTION_PROMPT, userMessage, {
-      sessionTitle: 'tool-selection',
-      maxWaitMs: 15000,
-    });
+    console.log('[DEBUG] Starting extractToolSelection...');
+    const startTime = Date.now();
     
-    // Clean markdown code blocks
-    const cleaned = response.content
-      .trim()
-      .replace(/```json\n?/g, '')
-      .replace(/```\n?/g, '')
-      .trim();
+    try {
+      const response = await this.sendPrompt(TOOL_SELECTION_PROMPT, userMessage, {
+        sessionTitle: 'tool-selection',
+        maxWaitMs: 30000,  // Increased from 15s to 30s
+      });
+      
+      const elapsed = Date.now() - startTime;
+      console.log(`[DEBUG] extractToolSelection completed in ${elapsed}ms`);
+      
+      // Clean markdown code blocks
+      const cleaned = response.content
+        .trim()
+        .replace(/```json\n?/g, '')
+        .replace(/```\n?/g, '')
+        .trim();
+      
+      return cleaned;
+    } catch (err) {
+      const elapsed = Date.now() - startTime;
+      console.error(`[ERROR] extractToolSelection failed after ${elapsed}ms:`, err instanceof Error ? err.message : err);
+      console.log('[FALLBACK] Using rule-based tool selection...');
+      
+      // Fallback: Use simple rule-based tool selection
+      return this.fallbackToolSelection(userMessage);
+    }
+  }
+
+  /**
+   * Fallback rule-based tool selection when OpenCode fails
+   */
+  private fallbackToolSelection(userMessage: string): string {
+    const msg = userMessage.toLowerCase();
     
-    return cleaned;
+    // Status query patterns
+    const statusPatterns = [
+      /是.*的嗎/, /現在.*嗎/, /.*狀態/, /.*如何/, /幾度/, /多少/,
+      /is.*on/, /is.*off/, /what.*temperature/, /how.*bright/,
+      /ついています/, /状態/, /温度/
+    ];
+    
+    const isStatusQuery = statusPatterns.some(pattern => pattern.test(msg));
+    
+    if (isStatusQuery) {
+      console.log('[FALLBACK] Detected status query → GetLiveContext');
+      return JSON.stringify({ tool_name: 'GetLiveContext', arguments: {} });
+    }
+    
+    // Control patterns
+    const turnOnPatterns = [/開/, /turn on/, /つけ/];
+    const turnOffPatterns = [/關/, /turn off/, /消/];
+    
+    if (turnOnPatterns.some(p => p.test(msg))) {
+      console.log('[FALLBACK] Detected turn on command → HassTurnOn');
+      // Extract device name (simplified)
+      return JSON.stringify({ tool_name: 'HassTurnOn', arguments: {} });
+    }
+    
+    if (turnOffPatterns.some(p => p.test(msg))) {
+      console.log('[FALLBACK] Detected turn off command → HassTurnOff');
+      return JSON.stringify({ tool_name: 'HassTurnOff', arguments: {} });
+    }
+    
+    // Default: treat as conversation
+    console.log('[FALLBACK] No pattern matched → chat');
+    return JSON.stringify({ tool_name: 'chat', arguments: {} });
+  }
+
+  /**
+   * Handle conversational requests (non-home-control)
+   * Responds naturally based on configuration and user's language
+   * 
+   * @param userMessage - User's original message
+   * @returns Natural language response
+   */
+  async handleConversation(
+    userMessage: string
+  ): Promise<string> {
+    
+    // Determine tone from config
+    const toneInstructions = {
+      friendly: 'Respond in a friendly, warm, and helpful manner. Use casual language and emojis occasionally. Show enthusiasm when appropriate.',
+      professional: 'Respond in a professional and courteous manner. Be clear and concise. Avoid emojis and casual language.',
+      concise: 'Respond very briefly and directly. Use minimal words. No greetings or pleasantries unless specifically asked.',
+    };
+    
+    const tone = toneInstructions[config.conversationTone as keyof typeof toneInstructions] || toneInstructions.friendly;
+    
+    // Determine language instructions
+    let languageInstructions = '';
+    if (config.conversationLanguage === 'auto') {
+      languageInstructions = `
+CRITICAL: Detect the language of the user's message and respond in THE SAME LANGUAGE.
+- If user speaks Chinese (Traditional or Simplified) → respond in Chinese
+- If user speaks Japanese → respond in Japanese  
+- If user speaks English → respond in English
+- Match the user's language exactly.
+`;
+    } else {
+      const languageMap = {
+        en: 'Respond in English.',
+        zh: 'Respond in Traditional Chinese (繁體中文).',
+        ja: 'Respond in Japanese (日本語).',
+      };
+      languageInstructions = languageMap[config.conversationLanguage as keyof typeof languageMap] || '';
+    }
+
+    // Get current time in JST
+    const now = new Date();
+    const jstTime = new Intl.DateTimeFormat('ja-JP', {
+      timeZone: 'Asia/Tokyo',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      weekday: 'long',
+    }).format(now);
+
+    const conversationPrompt = `You are a helpful and friendly smart home assistant for Home Assistant.
+
+${tone}
+
+${languageInstructions}
+
+Current Date and Time (JST - Japan Standard Time):
+${jstTime}
+
+Available capabilities:
+- Answer general questions (time, date, simple facts)
+- Engage in friendly conversation
+- Help users understand what they can control
+
+User: "${userMessage}"
+
+Instructions:
+1. If user asks about device status, politely explain that you cannot check live device status in conversation mode. Suggest they say the device control command directly (e.g., "Turn on the living room light").
+2. If user asks for time/date, use the "Current Date and Time" information provided above
+3. If user asks to control a device, politely guide them to say the control command directly
+4. Keep responses concise (1-3 sentences) unless user asks for detailed information
+5. Be helpful and natural
+
+Respond now:`;
+
+    const response = await this.sendPrompt(
+      conversationPrompt,
+      userMessage,
+      {
+        sessionTitle: 'conversation',
+        maxWaitMs: 30000,  // Increased from 15s to 30s
+      }
+    );
+
+    return response.content.trim();
   }
 
   isConnected(): boolean {

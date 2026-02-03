@@ -33,4 +33,10 @@ export interface ExtractionResult {
   
   /** Whether this is a repeated request (HA循環) */
   isRepeatedRequest: boolean;
+  
+  /** Whether this is a query tool result that needs an answer */
+  hasQueryToolResult: boolean;
+  
+  /** The tool result content if hasQueryToolResult is true */
+  toolResultContent: string | undefined;
 }

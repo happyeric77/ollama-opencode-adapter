@@ -22,6 +22,10 @@ export interface Config {
   
   // Logging
   logLevel: 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace';
+  
+  // Conversation settings
+  conversationTone: 'friendly' | 'professional' | 'concise';
+  conversationLanguage: 'auto' | 'en' | 'zh' | 'ja';
 }
 
 function getEnv(key: string, defaultValue?: string): string {
@@ -70,6 +74,10 @@ export function loadConfig(): Config {
     
     // Logging
     logLevel: (getEnv('LOG_LEVEL', 'info') as Config['logLevel']),
+    
+    // Conversation settings
+    conversationTone: (getEnv('CONVERSATION_TONE', 'friendly') as Config['conversationTone']),
+    conversationLanguage: (getEnv('CONVERSATION_LANGUAGE', 'auto') as Config['conversationLanguage']),
   };
 }
 
