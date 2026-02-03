@@ -57,7 +57,7 @@ export class OpencodeService {
     }
     
     const {
-      sessionTitle = "ha-ai-session",
+      sessionTitle = "ollama-opencode-session",
       maxWaitMs = 30000,
       pollIntervalMs = 300,
     } = options;

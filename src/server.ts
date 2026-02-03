@@ -213,13 +213,13 @@ Keep your answer concise and friendly.
 
         // Check if tools are provided
         if (!availableTools || availableTools.length === 0) {
-          fastify.log.error("No tools provided by Home Assistant");
+          fastify.log.error("No tools provided in request");
           return reply
             .code(400)
             .send(
               convertErrorToOllama(
                 new Error(
-                  "No tools provided by Home Assistant. Please configure your conversation agent.",
+                  "No tools provided in request. Please ensure tools are included in the API call.",
                 ),
                 body.model || config.modelId,
               ),
