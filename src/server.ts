@@ -158,18 +158,82 @@ CRITICAL: Detect the user's language and respond in the SAME language.
         }
         // ============ End query tool result handling ============
 
-        // If this is a repeated request (HA is retrying after tool execution), return acknowledgment
+        // If this is a repeated request (same user message sent twice), generate completion message
         if (isRepeatedRequest) {
           fastify.log.info(
-            "Detected repeated request after tool execution, returning acknowledgment only",
+            "Detected repeated request, generating completion confirmation",
           );
+          
+          // Extract the tool that was executed from previous assistant response
+          const previousAssistantMsg = body.messages
+            .slice()
+            .reverse()
+            .find(msg => msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0);
+          
+          if (previousAssistantMsg?.tool_calls?.[0]) {
+            const toolCall = previousAssistantMsg.tool_calls[0];
+            
+            try {
+              // Use LLM to generate natural completion message in user's language
+              const opencodeService = getOpencodeService();
+              const completionMessage = await opencodeService.generateCompletionMessage(
+                userMessage,
+                toolCall.function.name,
+                toolCall.function.arguments,
+                systemContext
+              );
+              
+              fastify.log.info(
+                { completionMessage },
+                "Generated completion message using LLM"
+              );
+              
+              const processingTimeMs = Date.now() - startTime;
+              const acknowledgment: OllamaChatResponse = {
+                model: body.model || config.modelId,
+                created_at: new Date().toISOString(),
+                message: {
+                  role: "assistant",
+                  content: completionMessage,
+                },
+                done: true,
+                done_reason: "stop",
+                total_duration: processingTimeMs * 1_000_000,
+                eval_count: 1,
+                eval_duration: processingTimeMs * 1_000_000,
+              };
+              return reply.code(200).send(acknowledgment);
+            } catch (err) {
+              fastify.log.error({ 
+                error: err instanceof Error ? err.message : err 
+              }, "Failed to generate completion message, using fallback");
+              
+              // Fallback: use simple "Done" message
+              const processingTimeMs = Date.now() - startTime;
+              return reply.code(200).send({
+                model: body.model || config.modelId,
+                created_at: new Date().toISOString(),
+                message: {
+                  role: "assistant",
+                  content: "Done",
+                },
+                done: true,
+                done_reason: "stop",
+                total_duration: processingTimeMs * 1_000_000,
+                eval_count: 1,
+                eval_duration: processingTimeMs * 1_000_000,
+              });
+            }
+          }
+          
+          // Fallback if no previous tool call found
+          fastify.log.warn("No previous tool call found in repeated request");
           const processingTimeMs = Date.now() - startTime;
-          const acknowledgment: OllamaChatResponse = {
+          return reply.code(200).send({
             model: body.model || config.modelId,
             created_at: new Date().toISOString(),
             message: {
               role: "assistant",
-              // TODO: If this means call_tool succeeded, we should make the content more informative
               content: "Done",
             },
             done: true,
@@ -177,8 +241,7 @@ CRITICAL: Detect the user's language and respond in the SAME language.
             total_duration: processingTimeMs * 1_000_000,
             eval_count: 1,
             eval_duration: processingTimeMs * 1_000_000,
-          };
-          return reply.code(200).send(acknowledgment);
+          });
         }
 
         // Check if tools are provided

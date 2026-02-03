@@ -330,6 +330,62 @@ Respond now:`;
     return response.content.trim();
   }
 
+  /**
+   * Generate completion message for tool execution
+   * Uses LLM to create natural, multi-language confirmation message
+   * 
+   * @param userMessage - Original user's request
+   * @param toolName - Name of the executed tool
+   * @param toolArgs - Arguments passed to the tool
+   * @param systemContext - System context for reference
+   * @returns Natural language completion message in user's language
+   */
+  async generateCompletionMessage(
+    userMessage: string,
+    toolName: string,
+    toolArgs: Record<string, any>,
+    systemContext: string
+  ): Promise<string> {
+    const prompt = `${systemContext}
+
+User said: "${userMessage}"
+
+The system has SUCCESSFULLY COMPLETED the following action:
+Tool: ${toolName}
+Arguments: ${JSON.stringify(toolArgs, null, 2)}
+
+Generate a short, natural confirmation message (1 sentence, maximum 10 words) that:
+1. Confirms the action was COMPLETED successfully
+2. Uses the EXACT SAME language as the user's message
+3. Is friendly and concise
+4. Does NOT ask questions or suggest next actions
+
+Language Examples:
+- User: "開客廳的燈" (Chinese) → "客廳的燈已經開啟了" (Chinese)
+- User: "turn on living room light" (English) → "Living room light is now on" (English)
+- User: "リビングの電気をつけて" (Japanese) → "リビングの電気をつけました" (Japanese)
+- User: "set volume to 50" (English) → "Volume set to 50" (English)
+
+Generate ONLY the confirmation message in the user's language, nothing else:`.trim();
+
+    try {
+      const response = await this.sendPrompt(
+        prompt,
+        userMessage,
+        {
+          sessionTitle: 'generate-completion',
+          maxWaitMs: 10000,  // 10 second timeout
+        }
+      );
+      
+      return response.content.trim();
+    } catch (err) {
+      console.error('[ERROR] generateCompletionMessage failed:', err instanceof Error ? err.message : err);
+      // Fallback to simple "Done"
+      return "Done";
+    }
+  }
+
   isConnected(): boolean {
     return this.client !== null;
   }

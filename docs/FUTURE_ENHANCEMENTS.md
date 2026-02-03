@@ -3,6 +3,7 @@
 ## 🔮 Planned Features
 
 ### 1. Session Management (Conversation History)
+
 **Priority**: Medium  
 **Status**: Not started
 
@@ -14,6 +15,7 @@ Currently, the conversation feature is stateless - each request is independent. 
 - Session timeout management
 
 **Use Case Example**:
+
 ```
 User: "Turn on the light"
 Assistant: "Done! Which room?"
@@ -21,6 +23,7 @@ User: "Living room"  ← Should remember "light"
 ```
 
 **Implementation Notes**:
+
 - Add session ID to requests
 - Store conversation history in Map or Redis
 - Pass history to LLM for context-aware responses
@@ -31,6 +34,7 @@ User: "Living room"  ← Should remember "light"
 ---
 
 ### 2. Multi-language Error Messages
+
 **Priority**: Low  
 **Status**: Not started
 
@@ -43,6 +47,7 @@ Currently, unknown tool error messages are in Japanese only. Could add:
 ---
 
 ### 3. Weather Integration
+
 **Priority**: Low  
 **Status**: Not started
 
@@ -55,6 +60,7 @@ If Home Assistant has weather integration:
 ---
 
 ### 4. Advanced Device Status Queries
+
 **Priority**: Medium  
 **Status**: Not started
 
@@ -67,36 +73,41 @@ Currently, device status queries are handled conversationally. Could add:
 ---
 
 ### 5. API Key Authentication
+
 **Priority**: Low  
 **Status**: Not started
 
 Add optional API key authentication to secure the adapter endpoints.
 
 **Features**:
+
 - Optional bearer token authentication
 - Configurable via `API_KEY` environment variable
 - Protection for public-facing deployments
 
 **Implementation Notes**:
+
 ```typescript
 // In server.ts
 if (config.apiKey) {
-  fastify.addHook('preHandler', async (request, reply) => {
+  fastify.addHook("preHandler", async (request, reply) => {
     const authHeader = request.headers.authorization;
     if (!authHeader || authHeader !== `Bearer ${config.apiKey}`) {
-      reply.code(401).send({ error: 'Unauthorized' });
+      reply.code(401).send({ error: "Unauthorized" });
     }
   });
 }
 ```
 
 **Configuration**:
+
 ```bash
 # .env
 API_KEY=your-secret-key-here
 ```
 
-**Use Case**: 
+**Use Case**:
+
 - When adapter is exposed to public internet
 - Multi-user scenarios requiring access control
 - Integration with external systems
