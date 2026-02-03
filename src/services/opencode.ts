@@ -91,9 +91,9 @@ export class OpencodeService {
         },
       });
       
-      // Add timeout to prompt call itself (10 seconds)
+      // Add timeout to prompt call itself (20 seconds for tool selection)
       const promptTimeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('session.prompt() timeout after 10s')), 10000)
+        setTimeout(() => reject(new Error('session.prompt() timeout after 20s')), 20000)
       );
       
       await Promise.race([promptPromise, promptTimeoutPromise]);
@@ -253,10 +253,20 @@ User: "現在客廳燈是開著的嗎" (GetLiveContext available)
     const startTime = Date.now();
     
     try {
-      const response = await this.sendPrompt(TOOL_SELECTION_PROMPT, userMessage, {
-        sessionTitle: 'tool-selection',
-        maxWaitMs: 30000,  // Increased from 15s to 30s
-      });
+      // Combine everything into the user message for better OpenCode compatibility
+      const fullPrompt = `${TOOL_SELECTION_PROMPT}
+
+Now, analyze this user request and respond with the JSON:
+User Request: "${userMessage}"`;
+      
+      const response = await this.sendPrompt(
+        "You are a tool selection expert. Respond with valid JSON only.",
+        fullPrompt,
+        {
+          sessionTitle: 'tool-selection',
+          maxWaitMs: 30000,
+        }
+      );
       
       const elapsed = Date.now() - startTime;
       console.log(`[DEBUG] extractToolSelection completed in ${elapsed}ms`);
