@@ -163,13 +163,13 @@ export class OpencodeService {
   /**
    * Extract tool selection from user message using available tools
    * 
-   * @param haSystemContext - YAML device list from HA
+   * @param systemContext - System context (device list, available data, etc.)
    * @param userMessage - User's command
-   * @param availableTools - Tools provided by HA
+   * @param availableTools - Tools provided by client
    * @returns JSON string with tool selection
    */
   async extractToolSelection(
-    haSystemContext: string,
+    systemContext: string,
     userMessage: string,
     availableTools: OllamaTool[]
   ): Promise<string> {
@@ -177,84 +177,66 @@ export class OpencodeService {
     // Format tools into LLM-friendly description
     const toolsDescription = formatToolsForLLM(availableTools);
     
-    const TOOL_SELECTION_PROMPT = `You are a smart home assistant for Home Assistant.
+    const TOOL_SELECTION_PROMPT = `You are a tool selection expert.
 
-${haSystemContext}
+Available Context:
+${systemContext}
 
-Available actions you can perform:
+Available Tools:
 ${toolsDescription}
 
-User request: "${userMessage}"
+User Request: "${userMessage}"
 
 CRITICAL: Respond with VALID JSON ONLY. No markdown, no explanations, no code blocks.
 
 Response Schema:
 {
-  "tool_name": "exact tool name from the available actions above OR 'chat' for conversation",
+  "tool_name": "exact tool name from available tools OR 'chat' for conversation",
   "arguments": {
     // parameters as defined in the tool schema (only if tool_name is not 'chat')
   }
 }
 
-Rules:
-1. DETERMINE REQUEST TYPE (CRITICAL - ALWAYS return valid JSON):
-   a) If the user wants to CONTROL HOME DEVICES (turn on/off, set brightness, change temperature, etc.):
-      → Choose appropriate tool from the list above
+Rules for Intent Detection (Priority Order):
+
+1. ACTION REQUEST (user wants to perform an action)
+   → Select the most appropriate action tool from the available tools list
+   → Fill in required parameters based on user's request and available context
+   → Extract parameter values from the user's request
    
-   b) If the user asks about DEVICE STATUS or STATE (is X on/off, what's the temperature, is X open/closed):
-      → Use GetLiveContext tool if available
-      → Return: {"tool_name": "GetLiveContext", "arguments": {}}
-      → Examples: "is the light on?", "what's the temperature?", "is the door locked?"
+2. INFORMATION QUERY (user asks about status, state, or information)
+   → Look for query-type tools in the available tools list
+   → Query tools often have names like "Get*", "Query*", "Fetch*", "*Status", "*Context"
+   → If a query tool exists, use it with appropriate parameters
+   → If no query tool exists, return: {"tool_name": "chat", "arguments": {}}
    
-   c) If the user is having a CONVERSATION (greeting, question, chat, general inquiry):
-      → MUST return: {"tool_name": "chat", "arguments": {}}
-      → Examples: "hello", "how are you", "thank you", "what time is it", "tell me a joke"
+3. CONVERSATION (greetings, thanks, general chat, unrelated questions)
+   → MUST return: {"tool_name": "chat", "arguments": {}}
+   → Examples: "hello", "how are you", "thank you", "tell me a joke"
+   → Time queries without a time tool: "what time is it?" → chat
 
-2. For HOME DEVICE CONTROL requests:
-   - Match device names exactly from the Static Context above
-   - Use exact device names from 'names' field (e.g., "Light living room")
-   - For parameters with type 'array', use array format (e.g., "domain": ["light"])
-   
-3. CRITICAL - Parameter selection for device control:
-   - If targeting a SPECIFIC DEVICE by name → use ONLY "name" + "domain" (do NOT include "area")
-   - If targeting ALL DEVICES in an area → use ONLY "area" + "domain" (do NOT include "name")
-   - NEVER include both "area" and "name" in the same request
+Parameter Extraction Guidelines:
+- Extract parameter values directly from user's request
+- Use information from the system context when needed
+- Match parameter types exactly as defined in tool schema
+- For array types, use array format: ["value1", "value2"]
+- Do not include optional parameters if not mentioned by user
 
-4. If you cannot determine which tool to use for a HOME CONTROL request:
-   - Return: {"tool_name": "unknown", "arguments": {}}
+Handling Ambiguity:
+- If user's intent is unclear for action requests: {"tool_name": "unknown", "arguments": {}}
+- If user asks for information but no query tool exists: {"tool_name": "chat", "arguments": {}}
+- When in doubt between action and conversation: prefer "chat"
 
-Examples:
-User: "turn on living room light"  ← Home control
-Device: "names: Light living room, domain: light"
-→ {"tool_name": "HassTurnOn", "arguments": {"name": "Light living room", "domain": ["light"]}}
-  NOTE: NO "area" field included!
+Generic Examples:
 
-User: "turn off all living room lights"  ← All devices in area
-→ {"tool_name": "HassTurnOff", "arguments": {"area": "Living Room", "domain": ["light"]}}
-  NOTE: NO "name" field included!
-
-User: "こんにちは"  ← Conversation (Japanese greeting)
+User: "hello"
 → {"tool_name": "chat", "arguments": {}}
 
-User: "ありがとう"  ← Conversation (Japanese thanks)
+User: "thank you"
 → {"tool_name": "chat", "arguments": {}}
 
-User: "今何時ですか？"  ← Conversation (Japanese time query)
+User: "what time is it?" (no time-related tool available)
 → {"tool_name": "chat", "arguments": {}}
-
-User: "リビングのライトはついていますか？"  ← Status query (Japanese)
-→ {"tool_name": "GetLiveContext", "arguments": {}}
-
-User: "現在客廳的燈是亮著的嗎"  ← Status query (Chinese)
-→ {"tool_name": "GetLiveContext", "arguments": {}}
-
-User: "溫度是多少"  ← Status query (Chinese)
-→ {"tool_name": "GetLiveContext", "arguments": {}}
-
-User: "set bedroom light to 50%"  ← Specific device
-Device: "names: Indirect light bedroom, domain: light"
-→ {"tool_name": "HassLightSet", "arguments": {"name": "Indirect light bedroom", "brightness": 50}}
-  NOTE: NO "area" field included!
 `.trim();
     
     console.log('[DEBUG] Starting extractToolSelection...');
