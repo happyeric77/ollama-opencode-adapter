@@ -90,9 +90,9 @@ export class OpencodeService {
         },
       });
       
-      // Add timeout to prompt call itself (20 seconds for tool selection)
+      // Add timeout to prompt call itself (40 seconds for complex prompts with many tools)
       const promptTimeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('session.prompt() timeout after 20s')), 20000)
+        setTimeout(() => reject(new Error('session.prompt() timeout after 40s')), 40000)
       );
       
       await Promise.race([promptPromise, promptTimeoutPromise]);
@@ -292,7 +292,7 @@ ${hasToolResult ? '\nNote: A tool result is available in the conversation histor
         fullPrompt,
         {
           sessionTitle: 'unified-response',
-          maxWaitMs: 30000,
+          maxWaitMs: 50000,  // Increased from 30s to 50s for complex prompts
         }
       );
       
@@ -315,10 +315,11 @@ ${hasToolResult ? '\nNote: A tool result is available in the conversation histor
       
     } catch (err) {
       console.error('[ERROR] generateResponse failed:', err instanceof Error ? err.message : err);
-      console.log('[FALLBACK] Attempting to generate answer from tool result or return chat');
+      console.log('[FALLBACK] Attempting fallback strategies');
       
-      // Fallback: Try to generate answer from tool result if available
+      // Fallback Strategy 1: Try to generate answer from tool result if available
       if (hasToolResult) {
+        console.log('[FALLBACK] Found tool result, trying to generate answer');
         try {
           const answer = await this.generateAnswerFromToolResult(
             conversationHistory,
@@ -328,12 +329,30 @@ ${hasToolResult ? '\nNote: A tool result is available in the conversation histor
             action: 'answer',
             content: answer
           };
-        } catch {
-          // If that fails too, fall back to chat
+        } catch (fallbackErr) {
+          console.error('[FALLBACK] generateAnswerFromToolResult failed:', 
+            fallbackErr instanceof Error ? fallbackErr.message : fallbackErr
+          );
         }
       }
       
-      // Final fallback: conversational response
+      // Fallback Strategy 2: For query requests, try to call GetLiveContext
+      const isQueryRequest = this.isQueryRequest(userMessage);
+      const hasGetLiveContext = availableTools.some(t => 
+        t.function.name === 'GetLiveContext' || t.function.name.toLowerCase().includes('context')
+      );
+      
+      if (isQueryRequest && hasGetLiveContext && !hasToolResult) {
+        console.log('[FALLBACK] Query request detected, calling GetLiveContext');
+        return {
+          action: 'tool_call',
+          tool_name: 'GetLiveContext',
+          arguments: {}
+        };
+      }
+      
+      // Fallback Strategy 3: Return error-specific message
+      console.log('[FALLBACK] Using final fallback chat response');
       return {
         action: 'chat',
         content: this.getFallbackChatResponse(userMessage)
@@ -390,6 +409,25 @@ Generate ONLY the answer, nothing else:`.trim();
       // Return the raw tool result as fallback
       return toolResult;
     }
+  }
+
+  /**
+   * Detect if user message is a query request (asking for information)
+   */
+  private isQueryRequest(userMessage: string): boolean {
+    const queryPatterns = [
+      /是.*嗎/,           // Chinese: 是...嗎
+      /現在.*是/,         // Chinese: 現在...是
+      /什麼.*狀態/,       // Chinese: 什麼狀態
+      /^請問/,           // Chinese: 請問
+      /^is\s/i,         // English: is...
+      /^are\s/i,        // English: are...
+      /\bstatus\b/i,    // English: status
+      /\bstate\b/i,     // English: state
+      /^what/i,         // English: what...
+    ];
+    
+    return queryPatterns.some(pattern => pattern.test(userMessage));
   }
 
   /**
