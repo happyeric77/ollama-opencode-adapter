@@ -3,6 +3,7 @@
 
 import { createOpencodeClient } from "@opencode-ai/sdk";
 import type { OllamaTool, OllamaMessage } from "../types/ollama.js";
+import type { UnifiedResponse } from "../types/tool-selection.js";
 import { ConversationHelper } from "./conversationHelper.js";
 import { config } from "../config.js";
 
@@ -150,23 +151,24 @@ export class OpencodeService {
   }
 
   /**
-   * Extract tool selection from user message using available tools
+   * Generate unified response based on conversation context
+   * Replaces extractToolSelection(), handleConversation(), and generateCompletionMessage()
    * 
    * @param systemContext - System context (device list, available data, etc.)
    * @param conversationHistory - Full conversation history
    * @param availableTools - Tools provided by client
-   * @returns JSON string with tool selection
+   * @returns UnifiedResponse (tool_call, answer, or chat)
    */
-  async extractToolSelection(
+  async generateResponse(
     systemContext: string,
     conversationHistory: OllamaMessage[],
     availableTools: OllamaTool[]
-  ): Promise<string> {
+  ): Promise<UnifiedResponse> {
     
-    // Get recent conversation context for tool selection (limit to last 10 messages for performance)
+    // Get recent conversation context (limit to last 10 messages for performance)
     const recentContext = ConversationHelper.buildToolSelectionContext(
       conversationHistory,
-      10  // Last 10 messages only
+      10
     );
     
     // Get the current user message
@@ -175,7 +177,11 @@ export class OpencodeService {
     // Format tools into LLM-friendly description
     const toolsDescription = formatToolsForLLM(availableTools);
     
-    const TOOL_SELECTION_PROMPT = `You are a tool selection expert.
+    // Check if last message is a tool result
+    const lastMessage = conversationHistory[conversationHistory.length - 1];
+    const hasToolResult = lastMessage?.role === 'tool';
+    
+    const UNIFIED_RESPONSE_PROMPT = `You are an intelligent assistant that decides how to respond to user requests.
 
 Available Context:
 ${systemContext}
@@ -187,80 +193,93 @@ User Request: "${userMessage}"
 
 CRITICAL: Respond with VALID JSON ONLY. No markdown, no explanations, no code blocks.
 
-Response Schema:
+Response Schema - You must choose ONE of these three response types:
+
+1. TOOL_CALL - When you need to call a tool to fulfill the request:
 {
-  "tool_name": "exact tool name from available tools OR 'chat' for conversation",
+  "action": "tool_call",
+  "tool_name": "exact tool name from available tools",
   "arguments": {
-    // parameters as defined in the tool schema (only if tool_name is not 'chat')
+    // parameters as defined in the tool schema
   }
 }
 
-Rules for Intent Detection (Priority Order):
+2. ANSWER - When tool results are available and you can answer the question:
+{
+  "action": "answer",
+  "content": "natural language answer based on tool results"
+}
 
-1. ACTION REQUEST (user wants to perform an action)
-   → Select the most appropriate action tool from the available tools list
-   → Fill in required parameters based on user's request and available context
-   → Extract parameter values from the user's request
-   
-2. INFORMATION QUERY (user asks about status, state, or information)
-   → CRITICAL: Look for query-type tools in the available tools list
-   → Query tools often have names like "Get*", "Query*", "Fetch*", "*Status", "*Context"
-   → IMPORTANT: Status questions like "is X on?", "what's the status?", "is X open?" MUST use query tools
-   → If a query tool exists, use it with appropriate parameters
-   → If no query tool exists, return: {"tool_name": "chat", "arguments": {}}
-   
-3. CONVERSATION (greetings, thanks, general chat, unrelated questions)
-   → MUST return: {"tool_name": "chat", "arguments": {}}
-   → Examples: "hello", "how are you", "thank you", "tell me a joke"
-   → Time queries without a time tool: "what time is it?" → chat
+3. CHAT - For conversational responses without tools:
+{
+  "action": "chat",
+  "content": "natural conversational response"
+}
+
+DECISION RULES (Priority Order):
+
+1. Check conversation history:
+   - If last message is a tool result, analyze if it answers the user's question
+   - IMPORTANT: Tool results show state at execution time, but state may have changed
+   - If tool result answers the question, return ANSWER with natural language explanation
+   - If tool result doesn't fully answer, consider calling another tool
+
+2. Check user intent:
+   - ACTION REQUEST (turn on/off, set, adjust, control) → TOOL_CALL
+   - INFORMATION QUERY (is X on?, what's the status?, get data) → TOOL_CALL (use query tools)
+   - CONVERSATION (greetings, thanks, general chat) → CHAT
+
+3. When in doubt about device state:
+   - DO NOT assume state from conversation history
+   - Prefer calling query tools (Get*, Query*, Fetch*, *Status, *Context) to check current state
+   - Devices can be controlled via other interfaces (physical switches, automation, other apps)
+
+4. Handling repeated requests:
+   - If user requests the same action again, EXECUTE IT AGAIN (don't assume state)
+   - Example: User says "開燈" → executed → 5 mins later says "開燈" → EXECUTE AGAIN
+   - Rationale: Device may have been turned off by automation or physical switch
 
 Parameter Extraction Guidelines:
 - Extract parameter values directly from user's request
 - Use information from the system context when needed
 - Match parameter types exactly as defined in tool schema
 - For array types, use array format: ["value1", "value2"]
-- Do not include optional parameters if not mentioned by user
-
-Handling Ambiguity:
-- If user's intent is unclear for action requests: {"tool_name": "unknown", "arguments": {}}
-- If user asks for information but no query tool exists: {"tool_name": "chat", "arguments": {}}
-- When in doubt between action and conversation: prefer "chat"
 
 Examples:
 
 User: "hello"
-→ {"tool_name": "chat", "arguments": {}}
+→ {"action": "chat", "content": "Hello! How can I help you?"}
 
 User: "thank you"
-→ {"tool_name": "chat", "arguments": {}}
+→ {"action": "chat", "content": "You're welcome!"}
 
-User: "what time is it?" (no time-related tool available)
-→ {"tool_name": "chat", "arguments": {}}
+User: "開客廳的燈"
+→ {"action": "tool_call", "tool_name": "CallService", "arguments": {"domain": "light", "service": "turn_on", "entity_id": ["light.living_room"]}}
 
-User: "is the light on?" (GetLiveContext available)
-→ {"tool_name": "GetLiveContext", "arguments": {}}
+User: "客廳的燈是開著的嗎" (GetLiveContext available)
+→ {"action": "tool_call", "tool_name": "GetLiveContext", "arguments": {}}
 
-User: "what's the temperature?" (GetLiveContext available)
-→ {"tool_name": "GetLiveContext", "arguments": {}}
+[After GetLiveContext returns: "客廳燈: 開啟"]
+→ {"action": "answer", "content": "是的，客廳的燈現在是開著的"}
 
-User: "現在客廳燈是開著的嗎" (GetLiveContext available)
-→ {"tool_name": "GetLiveContext", "arguments": {}}
+User: "開燈" (light already turned on 5 minutes ago in history)
+→ {"action": "tool_call", "tool_name": "CallService", "arguments": {...}}
+(Reason: Don't assume it's still on - it may have been turned off by automation)
 `.trim();
     
-    console.log('[DEBUG] Starting extractToolSelection...');
+    console.log('[DEBUG] Starting generateResponse...');
     
     try {
-      // Combine everything into the user message for better OpenCode compatibility
-      const fullPrompt = `${TOOL_SELECTION_PROMPT}
+      const fullPrompt = `${UNIFIED_RESPONSE_PROMPT}
 
-Now, analyze this user request and respond with the JSON:
-User Request: "${userMessage}"`;
+Now, analyze the conversation and respond with the appropriate JSON:
+${hasToolResult ? '\nNote: A tool result is available in the conversation history. Check if it answers the user\'s question.' : ''}`;
       
       const response = await this.sendPrompt(
-        "You are a tool selection expert. Respond with valid JSON only.",
+        "You are an intelligent assistant. Respond with valid JSON only.",
         fullPrompt,
         {
-          sessionTitle: 'tool-selection',
+          sessionTitle: 'unified-response',
           maxWaitMs: 30000,
         }
       );
@@ -272,122 +291,109 @@ User Request: "${userMessage}"`;
         .replace(/```\n?/g, '')
         .trim();
       
-      return cleaned;
-    } catch (err) {
-      console.error('[ERROR] extractToolSelection failed:', err instanceof Error ? err.message : err);
-      console.log('[FALLBACK] Returning conversational mode');
+      // Parse and validate response
+      const parsed = JSON.parse(cleaned);
       
-      // Fallback: Use simple rule-based tool selection
-      return this.fallbackToolSelection(userMessage);
+      // Validate response action type
+      if (!parsed.action || !['tool_call', 'answer', 'chat'].includes(parsed.action)) {
+        throw new Error(`Invalid response action: ${parsed.action}`);
+      }
+      
+      return parsed as UnifiedResponse;
+      
+    } catch (err) {
+      console.error('[ERROR] generateResponse failed:', err instanceof Error ? err.message : err);
+      console.log('[FALLBACK] Attempting to generate answer from tool result or return chat');
+      
+      // Fallback: Try to generate answer from tool result if available
+      if (hasToolResult) {
+        try {
+          const answer = await this.generateAnswerFromToolResult(
+            conversationHistory,
+            systemContext
+          );
+          return {
+            action: 'answer',
+            content: answer
+          };
+        } catch {
+          // If that fails too, fall back to chat
+        }
+      }
+      
+      // Final fallback: conversational response
+      return {
+        action: 'chat',
+        content: this.getFallbackChatResponse(userMessage)
+      };
     }
   }
 
   /**
-   * Fallback tool selection when OpenCode is unavailable
-   * Returns "chat" to maintain service availability without assuming tool names
+   * Generate answer from tool result in conversation history
+   * Used as fallback when unified response generation fails
    */
-  private fallbackToolSelection(_userMessage: string): string {
-    // Always return "chat" - let conversation handler deal with the message
-    // This is safer than guessing which tools exist
-    return JSON.stringify({ 
-      tool_name: 'chat', 
-      arguments: {} 
-    });
-  }
-
-  /**
-   * Handle conversational requests
-   * 
-   * @param conversationHistory - Full conversation history
-   * @param systemContext - Client's system prompt (from messages[0])
-   * @returns Natural language response
-   */
-  async handleConversation(
+  private async generateAnswerFromToolResult(
     conversationHistory: OllamaMessage[],
-    systemContext?: string
-  ): Promise<string> {
-    
-    // Build full prompt with conversation history using ConversationHelper
-    const fullPrompt = ConversationHelper.buildConversationPrompt(
-      conversationHistory,
-      systemContext,
-      {
-        includeDateTime: true,
-        // No maxHistoryMessages - include full history for better context
-      }
-    );
-
-    // Get the last user message for the prompt
-    const userMessage = ConversationHelper.getLastUserMessage(conversationHistory);
-
-    const response = await this.sendPrompt(
-      fullPrompt,
-      userMessage || "Continue the conversation",
-      {
-        sessionTitle: 'conversation',
-        maxWaitMs: 30000,
-      }
-    );
-
-    return response.content.trim();
-  }
-
-  /**
-   * Generate completion message for tool execution
-   * Uses LLM to create natural, multi-language confirmation message
-   * 
-   * @param conversationHistory - Full conversation history
-   * @param toolName - Name of the executed tool
-   * @param toolArgs - Arguments passed to the tool
-   * @param systemContext - System context for reference
-   * @returns Natural language completion message in user's language
-   */
-  async generateCompletionMessage(
-    conversationHistory: OllamaMessage[],
-    toolName: string,
-    toolArgs: Record<string, any>,
     systemContext: string
   ): Promise<string> {
-    // Get the original user request from history
-    const userMessage = ConversationHelper.getOriginalUserRequest(conversationHistory);
-    
+    // Get the last tool result
+    const lastMessage = conversationHistory[conversationHistory.length - 1];
+    if (lastMessage?.role !== 'tool') {
+      throw new Error('No tool result available');
+    }
+
+    const userMessage = ConversationHelper.getLastUserMessage(conversationHistory);
+    const toolResult = typeof lastMessage.content === 'string' 
+      ? lastMessage.content 
+      : JSON.stringify(lastMessage.content);
+
     const prompt = `${systemContext}
 
-User said: "${userMessage}"
+User asked: "${userMessage}"
 
-The system has SUCCESSFULLY COMPLETED the following action:
-Tool: ${toolName}
-Arguments: ${JSON.stringify(toolArgs, null, 2)}
+Tool returned this result:
+${toolResult}
 
-Generate a short, natural confirmation message (1 sentence, maximum 10 words) that:
-1. Confirms the action was COMPLETED successfully
+Generate a natural language answer (1-2 sentences) that:
+1. Answers the user's question based on the tool result
 2. Uses the EXACT SAME language as the user's message
-3. Is friendly and concise
-4. Does NOT ask questions or suggest next actions
+3. Is clear and concise
 
-Language Examples:
-- User: "開客廳的燈" (Chinese) → "客廳的燈已經開啟了" (Chinese)
-- User: "turn on living room light" (English) → "Living room light is now on" (English)
-- User: "リビングの電気をつけて" (Japanese) → "リビングの電気をつけました" (Japanese)
-- User: "set volume to 50" (English) → "Volume set to 50" (English)
-
-Generate ONLY the confirmation message in the user's language, nothing else:`.trim();
+Generate ONLY the answer, nothing else:`.trim();
 
     try {
       const response = await this.sendPrompt(
         prompt,
         userMessage,
         {
-          sessionTitle: 'generate-completion',
-          maxWaitMs: 10000,  // 10 second timeout
+          sessionTitle: 'generate-answer',
+          maxWaitMs: 10000,
         }
       );
       
       return response.content.trim();
     } catch (err) {
-      console.error('[ERROR] generateCompletionMessage failed:', err instanceof Error ? err.message : err);
-      // Fallback to simple "Done"
-      return "Done";
+      console.error('[ERROR] generateAnswerFromToolResult failed:', err instanceof Error ? err.message : err);
+      // Return the raw tool result as fallback
+      return toolResult;
+    }
+  }
+
+  /**
+   * Get a simple fallback chat response when all else fails
+   */
+  private getFallbackChatResponse(userMessage: string): string {
+    // Detect language and respond appropriately
+    const hasChineseChars = /[\u4e00-\u9fa5]/.test(userMessage);
+    const hasJapaneseChars = /[\u3040-\u309f\u30a0-\u30ff]/.test(userMessage);
+    
+    if (hasChineseChars) {
+      return "我現在無法處理這個請求，請稍後再試。";
+    } else if (hasJapaneseChars) {
+      return "申し訳ございませんが、現在このリクエストを処理できません。";
+    } else {
+      return "I'm unable to process this request right now. Please try again later.";
     }
   }
 

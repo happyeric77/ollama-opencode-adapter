@@ -5,17 +5,16 @@ import cors from "@fastify/cors";
 import { config } from "./config.js";
 import type {
   OllamaChatRequest,
-  OllamaChatResponse,
   OllamaTagsResponse,
   OllamaShowResponse,
   OllamaVersionResponse,
 } from "./types/ollama.js";
-import type { ToolSelection } from "./types/tool-selection.js";
+import type { UnifiedResponse } from "./types/tool-selection.js";
 import { getOpencodeService } from "./services/opencode.js";
 import { ConversationHelper } from "./services/conversationHelper.js";
 import {
   extractMessagesAndTools,
-  convertToolSelectionToOllama,
+  convertUnifiedResponseToOllama,
   convertErrorToOllama,
 } from "./adapters/ollamaAdapter.js";
 // TODO: Should use the version from package.json dynamically
@@ -70,14 +69,11 @@ export async function createServer() {
           });
         }
 
-        // Extract messages, tools, and detect repeated requests
+        // Extract messages, tools, and system context
         const {
           systemContext,
           conversationHistory,
           availableTools,
-          isRepeatedRequest,
-          hasQueryToolResult,
-          toolResultContent,
         } = extractMessagesAndTools(body);
 
         // Validate conversation history
@@ -99,304 +95,76 @@ export async function createServer() {
             toolMessages: messageCounts.tool,
             lastUserMessage: userMessage,
             toolsAvailable: availableTools.length,
-            isRepeatedRequest,
-            hasQueryToolResult,
           },
           "Extracted context and conversation history",
         );
 
-        // ============ Handle query tool results ============
-        // If this is a query tool result (e.g., GetLiveContext), generate answer using the result
-        if (hasQueryToolResult && toolResultContent) {
-          fastify.log.info("Detected query tool result, generating answer from tool result");
-          
-          try {
-            const opencodeService = getOpencodeService();
-            
-            // Create a prompt to generate answer based on tool result
-            const answerPrompt = `${systemContext}
-
-User asked: ${userMessage}
-
-System Information:
-${toolResultContent}
-
-Based on the system information above, answer the user's question naturally and concisely.
-
-CRITICAL: Detect the user's language and respond in the SAME language.
-`.trim();
-
-            const answerResponse = await opencodeService.sendPrompt(
-              answerPrompt,
-              userMessage,
-              {
-                sessionTitle: 'query-tool-answer',
-                maxWaitMs: 30000,  // Increased from 15s to 30s
-              }
-            );
-            
-            const processingTimeMs = Date.now() - startTime;
-            const totalDurationNs = processingTimeMs * 1_000_000;
-            
-            const response: OllamaChatResponse = {
-              model: body.model || config.modelId,
-              created_at: new Date().toISOString(),
-              message: {
-                role: 'assistant',
-                content: answerResponse.content.trim(),
-              },
-              done: true,
-              done_reason: 'stop',
-              total_duration: totalDurationNs,
-              eval_count: 1,
-              eval_duration: totalDurationNs,
-            };
-            
-            fastify.log.info({ answer: answerResponse.content }, "Generated answer from tool result");
-            return reply.code(200).send(response);
-          } catch (err) {
-            fastify.log.error({ 
-              error: err instanceof Error ? {
-                message: err.message,
-                stack: err.stack,
-                name: err.name,
-              } : err 
-            }, "Error generating answer from tool result");
-            // Fall through to normal error handling
-          }
-        }
-        // ============ End query tool result handling ============
-
-        // If this is a repeated request (same user message sent twice), generate completion message
-        if (isRepeatedRequest) {
-          fastify.log.info(
-            "Detected repeated request, generating completion confirmation",
+        // ============ Unified Response Generation ============
+        // Use OpenCode to generate unified response (tool_call, answer, or chat)
+        const opencodeService = getOpencodeService();
+        
+        let unifiedResponse: UnifiedResponse;
+        
+        try {
+          unifiedResponse = await opencodeService.generateResponse(
+            systemContext,
+            conversationHistory,
+            availableTools
           );
           
-          // Extract the tool that was executed from previous assistant response
-          const previousAssistantMsg = body.messages
-            .slice()
-            .reverse()
-            .find(msg => msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0);
-          
-          if (previousAssistantMsg?.tool_calls?.[0]) {
-            const toolCall = previousAssistantMsg.tool_calls[0];
-            
-            try {
-              // Use LLM to generate natural completion message in user's language
-              const opencodeService = getOpencodeService();
-              const completionMessage = await opencodeService.generateCompletionMessage(
-                conversationHistory,
-                toolCall.function.name,
-                toolCall.function.arguments,
-                systemContext
-              );
-              
-              fastify.log.info(
-                { completionMessage },
-                "Generated completion message using LLM"
-              );
-              
-              const processingTimeMs = Date.now() - startTime;
-              const acknowledgment: OllamaChatResponse = {
-                model: body.model || config.modelId,
-                created_at: new Date().toISOString(),
-                message: {
-                  role: "assistant",
-                  content: completionMessage,
-                },
-                done: true,
-                done_reason: "stop",
-                total_duration: processingTimeMs * 1_000_000,
-                eval_count: 1,
-                eval_duration: processingTimeMs * 1_000_000,
-              };
-              return reply.code(200).send(acknowledgment);
-            } catch (err) {
-              fastify.log.error({ 
-                error: err instanceof Error ? err.message : err 
-              }, "Failed to generate completion message, using fallback");
-              
-              // Fallback: use simple "Done" message
-              const processingTimeMs = Date.now() - startTime;
-              return reply.code(200).send({
-                model: body.model || config.modelId,
-                created_at: new Date().toISOString(),
-                message: {
-                  role: "assistant",
-                  content: "Done",
-                },
-                done: true,
-                done_reason: "stop",
-                total_duration: processingTimeMs * 1_000_000,
-                eval_count: 1,
-                eval_duration: processingTimeMs * 1_000_000,
-              });
-            }
-          }
-          
-          // Fallback if no previous tool call found
-          fastify.log.warn("No previous tool call found in repeated request");
-          const processingTimeMs = Date.now() - startTime;
-          return reply.code(200).send({
-            model: body.model || config.modelId,
-            created_at: new Date().toISOString(),
-            message: {
-              role: "assistant",
-              content: "Done",
-            },
-            done: true,
-            done_reason: "stop",
-            total_duration: processingTimeMs * 1_000_000,
-            eval_count: 1,
-            eval_duration: processingTimeMs * 1_000_000,
-          });
-        }
-
-        // Handle chat-only mode (no tools provided)
-        // This allows the adapter to work like standard Ollama without tools
-        if (!availableTools || availableTools.length === 0) {
-          fastify.log.info("No tools provided, using chat-only mode");
-          
-          try {
-            const opencodeService = getOpencodeService();
-            const chatResponse = await opencodeService.handleConversation(
-              conversationHistory,
-              systemContext
-            );
-            
-            const processingTimeMs = Date.now() - startTime;
-            const totalDurationNs = processingTimeMs * 1_000_000;
-            
-            const response: OllamaChatResponse = {
-              model: body.model || config.modelId,
-              created_at: new Date().toISOString(),
-              message: {
-                role: 'assistant',
-                content: chatResponse,
-              },
-              done: true,
-              done_reason: 'stop',
-              total_duration: totalDurationNs,
-              eval_count: 1,
-              eval_duration: totalDurationNs,
-            };
-            
-            fastify.log.info({ response: response.message.content }, "Sending chat-only response");
-            return reply.code(200).send(response);
-          } catch (err) {
-            fastify.log.error({ 
-              error: err instanceof Error ? {
-                message: err.message,
-                stack: err.stack,
-                name: err.name,
-              } : err 
-            }, "Error generating chat-only response");
-            
-            return reply.code(500).send(
-              convertErrorToOllama(
-                err instanceof Error ? err : new Error("Failed to generate chat response"),
-                body.model || config.modelId
-              )
-            );
-          }
-        }
-
-        // Extract tool selection using OpenCode
-        const opencodeService = getOpencodeService();
-        const toolSelectionStr = await opencodeService.extractToolSelection(
-          systemContext,
-          conversationHistory,
-          availableTools,
-        );
-
-        fastify.log.info({ toolSelectionStr }, "Extracted tool selection JSON");
-
-        // Parse tool selection
-        let toolSelection: ToolSelection;
-        try {
-          toolSelection = JSON.parse(toolSelectionStr);
           fastify.log.info(
-            { toolSelection },
-            "Successfully parsed tool selection",
+            { 
+              action: unifiedResponse.action,
+              tool_name: unifiedResponse.action === 'tool_call' ? (unifiedResponse as any).tool_name : undefined 
+            },
+            "Generated unified response"
           );
         } catch (err) {
-          // If LLM didn't return JSON, treat as unknown
-          fastify.log.warn(
-            { error: err, raw: toolSelectionStr },
-            "Failed to parse tool selection JSON",
-          );
-          toolSelection = {
-            tool_name: "unknown",
-            arguments: {},
-          };
-        }
-
-        // ============ Handle conversational requests ============
-        if (toolSelection.tool_name === "chat") {
-          fastify.log.info("Detected conversational request, generating chat response");
+          fastify.log.error({ 
+            error: err instanceof Error ? {
+              message: err.message,
+              stack: err.stack,
+              name: err.name,
+            } : err 
+          }, "Error generating unified response");
           
-          try {
-            const opencodeService = getOpencodeService();
-            const chatResponse = await opencodeService.handleConversation(
-              conversationHistory,
-              systemContext
-            );
-            
-            const processingTimeMs = Date.now() - startTime;
-            const totalDurationNs = processingTimeMs * 1_000_000;
-            
-            const response: OllamaChatResponse = {
-              model: body.model || config.modelId,
-              created_at: new Date().toISOString(),
-              message: {
-                role: 'assistant',
-                content: chatResponse,
-              },
-              done: true,
-              done_reason: 'stop',
-              total_duration: totalDurationNs,
-              eval_count: 1,
-              eval_duration: totalDurationNs,
-            };
-            
-            fastify.log.info({ response: response.message.content }, "Sending chat response");
-            return reply.code(200).send(response);
-          } catch (err) {
-            fastify.log.error({ 
-              error: err instanceof Error ? {
-                message: err.message,
-                stack: err.stack,
-                name: err.name,
-              } : err 
-            }, "Error generating chat response");
-            // Fall through to normal error handling
-          }
-        }
-        // ============ End conversational handling ============
-
-        // Validate tool_name against available tools
-        const isValidTool = availableTools.some(
-          (t) => t.function.name === toolSelection.tool_name,
-        );
-
-        if (!isValidTool && toolSelection.tool_name !== "unknown" && toolSelection.tool_name !== "chat") {
-          fastify.log.warn(
-            {
-              selected: toolSelection.tool_name,
-              available: availableTools.map((t) => t.function.name),
-            },
-            "LLM selected invalid tool name, treating as unknown",
+          return reply.code(500).send(
+            convertErrorToOllama(
+              err instanceof Error ? err : new Error("Failed to generate response"),
+              body.model || config.modelId
+            )
           );
-          toolSelection.tool_name = "unknown";
+        }
+
+        // Validate tool_call responses against available tools
+        if (unifiedResponse.action === 'tool_call') {
+          const toolCallResponse = unifiedResponse; // TypeScript narrows the type here
+          const isValidTool = availableTools.some(
+            (t) => t.function.name === toolCallResponse.tool_name,
+          );
+
+          if (!isValidTool && toolCallResponse.tool_name !== "unknown") {
+            fastify.log.warn(
+              {
+                selected: toolCallResponse.tool_name,
+                available: availableTools.map((t) => t.function.name),
+              },
+              "LLM selected invalid tool name, treating as unknown",
+            );
+            unifiedResponse = {
+              action: 'tool_call',
+              tool_name: "unknown",
+              arguments: {}
+            };
+          }
         }
 
         // Calculate processing time
         const processingTimeMs = Date.now() - startTime;
 
         // Convert to Ollama response
-        const response = convertToolSelectionToOllama(
-          toolSelection,
+        const response = convertUnifiedResponseToOllama(
+          unifiedResponse,
           body.model || config.modelId,
           processingTimeMs,
         );
