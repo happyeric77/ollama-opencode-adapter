@@ -278,26 +278,32 @@ ConversationHelper.countMessagesByRole(history);
    - Initialize/cleanup OpenCode client
    - Connection management
 
-2. **sendPrompt(systemPrompt, userMessage, options)**
-   - Core communication with OpenCode
-   - Session creation, prompt sending, response polling
-   - Timeout handling and cleanup
-   - Returns: `{content, elapsed}`
-
-3. **generateResponse(systemContext, conversationHistory, availableTools)**
-   - **NEW unified method** replacing three old methods
+2. **generateResponse(systemContext, conversationHistory, availableTools)**
+   - **Main public API** - unified method replacing three old methods
    - Uses LLM to decide response type: tool_call, answer, or chat
    - Formats tools into LLM-friendly description
    - Sends unified prompt to LLM
    - Parses and validates response
    - Returns: `UnifiedResponse`
 
-4. **generateAnswerFromToolResult(conversationHistory, systemContext)** (private)
+3. **isConnected()**
+   - Check connection status
+   - Returns: boolean
+
+**Private Implementation Methods:**
+
+4. **sendPrompt(systemPrompt, userMessage, options)** (private)
+   - Core communication with OpenCode
+   - Session creation, prompt sending, response polling
+   - Timeout handling and cleanup
+   - Returns: `{content, elapsed}`
+
+5. **generateAnswerFromToolResult(conversationHistory, systemContext)** (private)
    - Fallback helper when unified response generation fails
    - Generates natural language answer from tool result
    - Returns: Answer string
 
-5. **getFallbackChatResponse(userMessage)** (private)
+6. **getFallbackChatResponse(userMessage)** (private)
    - Final fallback for error cases
    - Detects user language and responds appropriately
    - Returns: Simple error message in user's language

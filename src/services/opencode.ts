@@ -44,8 +44,10 @@ export class OpencodeService {
    * 2. Send prompt
    * 3. Poll for response
    * 4. Delete session (cleanup)
+   * 
+   * @private Internal method - use generateResponse() for external calls
    */
-  async sendPrompt(
+  private async sendPrompt(
     systemPrompt: string,
     userMessage: string,
     options: {
