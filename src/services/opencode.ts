@@ -218,26 +218,30 @@ Response Schema - You must choose ONE of these three response types:
 
 DECISION RULES (Priority Order):
 
-1. Check conversation history:
-   - If last message is a tool result, analyze if it answers the user's question
-   - IMPORTANT: Tool results show state at execution time, but state may have changed
-   - If tool result answers the question, return ANSWER with natural language explanation
-   - If tool result doesn't fully answer, consider calling another tool
+1. Check conversation history FIRST:
+   - If last message is a tool result:
+     a) For ACTION requests (turn on/off, set, etc.): Return ANSWER to confirm completion
+        Example: User "開燈" → Tool executed → Return {"action": "answer", "content": "客廳燈已經開啟了"}
+     b) For QUERY requests (is X on?, what's status?): Return ANSWER with the information
+        Example: User "燈是開的嗎" → Tool returns state → Return {"action": "answer", "content": "是的，燈現在是開著的"}
+   - CRITICAL: If tool was just executed for current user request, DO NOT execute it again
+   - Only execute tool again if user makes a NEW request (different intent or after time passed)
 
-2. Check user intent:
+2. Check user intent (only if NO recent tool result):
    - ACTION REQUEST (turn on/off, set, adjust, control) → TOOL_CALL
    - INFORMATION QUERY (is X on?, what's the status?, get data) → TOOL_CALL (use query tools)
    - CONVERSATION (greetings, thanks, general chat) → CHAT
 
 3. When in doubt about device state:
-   - DO NOT assume state from conversation history
+   - DO NOT assume state from old conversation history (>1 minute ago)
    - Prefer calling query tools (Get*, Query*, Fetch*, *Status, *Context) to check current state
    - Devices can be controlled via other interfaces (physical switches, automation, other apps)
 
 4. Handling repeated requests:
-   - If user requests the same action again, EXECUTE IT AGAIN (don't assume state)
-   - Example: User says "開燈" → executed → 5 mins later says "開燈" → EXECUTE AGAIN
-   - Rationale: Device may have been turned off by automation or physical switch
+   - If user makes the SAME request after receiving an answer: acknowledge instead of re-executing
+   - If user makes the SAME request after TIME PASSED (no recent tool result): execute again
+   - Example: User "開燈" → executed → immediately says "開燈" again → Return "燈已經開啟了"
+   - Example: User "開燈" → executed → 5 mins later says "開燈" → Execute again (state may have changed)
 
 Parameter Extraction Guidelines:
 - Extract parameter values directly from user's request
@@ -254,17 +258,25 @@ User: "thank you"
 → {"action": "chat", "content": "You're welcome!"}
 
 User: "開客廳的燈"
-→ {"action": "tool_call", "tool_name": "CallService", "arguments": {"domain": "light", "service": "turn_on", "entity_id": ["light.living_room"]}}
+→ {"action": "tool_call", "tool_name": "HassTurnOn", "arguments": {"area": "Living Room", "domain": ["light"]}}
 
-User: "客廳的燈是開著的嗎" (GetLiveContext available)
+[After HassTurnOn executed successfully]
+User: "開客廳的燈" (same request, tool just executed)
+→ {"action": "answer", "content": "客廳燈已經開啟了"}
+
+User: "客廳的燈是開著的嗎" (query request)
 → {"action": "tool_call", "tool_name": "GetLiveContext", "arguments": {}}
 
 [After GetLiveContext returns: "客廳燈: 開啟"]
+User: "客廳的燈是開著的嗎" (query result available)
 → {"action": "answer", "content": "是的，客廳的燈現在是開著的"}
 
-User: "開燈" (light already turned on 5 minutes ago in history)
-→ {"action": "tool_call", "tool_name": "CallService", "arguments": {...}}
-(Reason: Don't assume it's still on - it may have been turned off by automation)
+User: "開燈" → [Tool executed] → User immediately asks "開燈" again
+→ {"action": "answer", "content": "燈已經開啟了"}
+
+User: "開燈" → [Tool executed 5 minutes ago, no recent activity]
+→ {"action": "tool_call", "tool_name": "HassTurnOn", "arguments": {...}}
+(Reason: Time passed, state may have changed)
 `.trim();
     
     console.log('[DEBUG] Starting generateResponse...');
