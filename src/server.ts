@@ -48,6 +48,36 @@ export async function createServer() {
     async (request, reply) => {
       const startTime = Date.now();
 
+      // Helper function to generate chat response (used for both chat-only mode and "chat" tool)
+      const generateChatResponse = async (
+        userMessage: string,
+        systemContext: string,
+        model: string
+      ): Promise<OllamaChatResponse> => {
+        const opencodeService = getOpencodeService();
+        const chatResponse = await opencodeService.handleConversation(
+          userMessage,
+          systemContext
+        );
+        
+        const processingTimeMs = Date.now() - startTime;
+        const totalDurationNs = processingTimeMs * 1_000_000;
+        
+        return {
+          model,
+          created_at: new Date().toISOString(),
+          message: {
+            role: 'assistant',
+            content: chatResponse,
+          },
+          done: true,
+          done_reason: 'stop',
+          total_duration: totalDurationNs,
+          eval_count: 1,
+          eval_duration: totalDurationNs,
+        };
+      };
+
       try {
         const body = request.body;
 
@@ -244,19 +274,36 @@ CRITICAL: Detect the user's language and respond in the SAME language.
           });
         }
 
-        // Check if tools are provided
+        // Handle chat-only mode (no tools provided)
+        // This allows the adapter to work like standard Ollama without tools
         if (!availableTools || availableTools.length === 0) {
-          fastify.log.error("No tools provided in request");
-          return reply
-            .code(400)
-            .send(
-              convertErrorToOllama(
-                new Error(
-                  "No tools provided in request. Please ensure tools are included in the API call.",
-                ),
-                body.model || config.modelId,
-              ),
+          fastify.log.info("No tools provided, using chat-only mode");
+          
+          try {
+            const response = await generateChatResponse(
+              userMessage,
+              systemContext,
+              body.model || config.modelId
             );
+            
+            fastify.log.info({ response: response.message.content }, "Sending chat-only response");
+            return reply.code(200).send(response);
+          } catch (err) {
+            fastify.log.error({ 
+              error: err instanceof Error ? {
+                message: err.message,
+                stack: err.stack,
+                name: err.name,
+              } : err 
+            }, "Error generating chat-only response");
+            
+            return reply.code(500).send(
+              convertErrorToOllama(
+                err instanceof Error ? err : new Error("Failed to generate chat response"),
+                body.model || config.modelId
+              )
+            );
+          }
         }
 
         // Extract tool selection using OpenCode
@@ -294,29 +341,13 @@ CRITICAL: Detect the user's language and respond in the SAME language.
           fastify.log.info("Detected conversational request, generating chat response");
           
           try {
-            const chatResponse = await opencodeService.handleConversation(
+            const response = await generateChatResponse(
               userMessage,
-              systemContext  // Pass client's system context
+              systemContext,
+              body.model || config.modelId
             );
             
-            const processingTimeMs = Date.now() - startTime;
-            const totalDurationNs = processingTimeMs * 1_000_000;
-            
-            const response: OllamaChatResponse = {
-              model: body.model || config.modelId,
-              created_at: new Date().toISOString(),
-              message: {
-                role: 'assistant',
-                content: chatResponse,
-              },
-              done: true,
-              done_reason: 'stop',
-              total_duration: totalDurationNs,
-              eval_count: 1,
-              eval_duration: totalDurationNs,
-            };
-            
-            fastify.log.info({ response: chatResponse }, "Sending chat response");
+            fastify.log.info({ response: response.message.content }, "Sending chat response");
             return reply.code(200).send(response);
           } catch (err) {
             fastify.log.error({ 

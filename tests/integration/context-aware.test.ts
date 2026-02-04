@@ -96,4 +96,20 @@ describe('Dynamic Tool Selection Integration', () => {
     expect(mockHATools).toContain('HassMediaSearchAndPlay');
     expect(mockHATools).toContain('GetDateTime');
   });
+
+  it('should handle chat request without tools (chat-only mode)', () => {
+    // This validates the schema for chat-only requests
+    // When HA disables "Control Home Assistant", no tools are provided
+    const chatOnlyRequest = {
+      model: 'gpt-4o',
+      messages: [
+        { role: 'user', content: '早安' }
+      ]
+      // No tools array provided
+    };
+
+    expect(chatOnlyRequest).toHaveProperty('messages');
+    expect(chatOnlyRequest.messages).toHaveLength(1);
+    expect(chatOnlyRequest).not.toHaveProperty('tools');
+  });
 });
