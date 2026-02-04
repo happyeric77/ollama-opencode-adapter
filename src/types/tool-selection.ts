@@ -1,17 +1,35 @@
 /**
- * Tool Selection Types
+ * Unified Response Generation Types
  * 
- * Types for dynamic tool selection approach where the LLM selects
- * from available tools provided by Home Assistant.
+ * Types for unified response generation approach where the LLM decides
+ * whether to call a tool, generate an answer, or chat conversationally.
+ * 
+ * This replaces the previous tool-selection-only approach.
  */
 
 import type { OllamaTool, OllamaMessage } from './ollama.js';
 
 /**
- * Result of LLM tool selection
+ * Unified response from LLM
+ * 
+ * The LLM can return one of three action types:
+ * - tool_call: Call a specific tool with arguments
+ * - answer: Generate a natural language answer (e.g., based on tool results)
+ * - chat: Respond conversationally (e.g., greetings, small talk)
  */
-export interface ToolSelection {
-  /** Name of the selected tool (e.g., "HassTurnOn", "HassLightSet") */
+export type UnifiedResponse = 
+  | ToolCallResponse
+  | AnswerResponse
+  | ChatResponse;
+
+/**
+ * Tool call response - LLM wants to call a tool
+ */
+export interface ToolCallResponse {
+  /** Action type identifier */
+  action: "tool_call";
+  
+  /** Name of the tool to call (e.g., "TurnOnLight", "GetLiveContext") */
   tool_name: string;
   
   /** Arguments for the tool as key-value pairs */
@@ -19,24 +37,50 @@ export interface ToolSelection {
 }
 
 /**
- * Extended extraction result with tool information
+ * Answer response - LLM generates an answer based on context (e.g., tool results)
+ */
+export interface AnswerResponse {
+  /** Action type identifier */
+  action: "answer";
+  
+  /** Natural language answer in user's language */
+  content: string;
+}
+
+/**
+ * Chat response - LLM responds conversationally
+ */
+export interface ChatResponse {
+  /** Action type identifier */
+  action: "chat";
+  
+  /** Conversational response in user's language */
+  content: string;
+}
+
+/**
+ * Extraction result from Ollama request
+ * 
+ * Simplified from previous version - removed repeated request detection
+ * and query tool result handling as these are now handled by the unified
+ * response generation logic.
  */
 export interface ExtractionResult {
-  /** System context (YAML device list from HA) */
+  /** System context (e.g., YAML device list from HA) */
   systemContext: string;
   
-  /** Full conversation history (replaces userMessage) */
+  /** Full conversation history */
   conversationHistory: OllamaMessage[];
   
-  /** Available tools from HA request */
+  /** Available tools from client request */
   availableTools: OllamaTool[];
-  
-  /** Whether this is a repeated request (HA循環) */
-  isRepeatedRequest: boolean;
-  
-  /** Whether this is a query tool result that needs an answer */
-  hasQueryToolResult: boolean;
-  
-  /** The tool result content if hasQueryToolResult is true */
-  toolResultContent: string | undefined;
+}
+
+/**
+ * Legacy type for backward compatibility during migration
+ * @deprecated Use UnifiedResponse instead
+ */
+export interface ToolSelection {
+  tool_name: string;
+  arguments: Record<string, any>;
 }

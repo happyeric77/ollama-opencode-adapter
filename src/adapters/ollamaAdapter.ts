@@ -1,6 +1,6 @@
 /**
  * Ollama Adapter
- * Converts between Ollama API format and internal ToolSelection format
+ * Converts between Ollama API format and internal UnifiedResponse format
  */
 
 import type {
@@ -10,12 +10,15 @@ import type {
   OllamaToolCall,
 } from "../types/ollama.js";
 import type {
-  ToolSelection,
+  UnifiedResponse,
   ExtractionResult,
 } from "../types/tool-selection.js";
 
 /**
- * Extract messages, tools, and detect repeated requests from Ollama chat request
+ * Extract messages, tools from Ollama chat request
+ * 
+ * Simplified from previous version - no longer detects repeated requests
+ * or query tool results. These are now handled by unified response generation.
  */
 export function extractMessagesAndTools(
   request: OllamaChatRequest,
@@ -34,74 +37,64 @@ export function extractMessagesAndTools(
     (msg) => msg.role !== "system",
   );
 
-  // Check for repeated request pattern
-  // HA sends: [..., assistant (with tool_calls), tool, assistant (with tool_calls), tool, ...]
-  // If the LAST message is 'tool' and the one before it is assistant with tool_calls, it's a repeat
-  // BUT: We should allow query tools (GetLiveContext, GetDateTime, etc.) to proceed for answering
-  let isRepeatedRequest = false;
-  let hasQueryToolResult = false;
-  let toolResultContent: string | undefined;
-
-  if (request.messages.length >= 2) {
-    const lastMsg = request.messages[request.messages.length - 1];
-    const secondLastMsg = request.messages[request.messages.length - 2];
-
-    // If last message is 'tool' result and second last is our assistant response with tool_calls
-    // This means HA executed the tool and is asking us again
-    if (
-      lastMsg?.role === "tool" &&
-      secondLastMsg?.role === "assistant" &&
-      secondLastMsg.tool_calls &&
-      secondLastMsg.tool_calls.length > 0
-    ) {
-      // Check if the tool was a QUERY tool (needs answer) or CONTROL tool (already done)
-      const toolName = secondLastMsg.tool_calls[0]?.function?.name;
-      const queryTools = ["GetLiveContext", "GetDateTime", "todo_get_items"];
-
-      if (toolName && queryTools.includes(toolName)) {
-        // This is a query tool - we need to use the result to answer the user
-        isRepeatedRequest = false;
-        hasQueryToolResult = true;
-        toolResultContent = lastMsg.content;
-      } else {
-        // This is a control tool - already executed, treat as repeated request
-        isRepeatedRequest = true;
-      }
-    }
-  }
-
   return {
     systemContext: systemContext.trim(),
     conversationHistory,
     availableTools: request.tools || [],
-    isRepeatedRequest,
-    hasQueryToolResult,
-    toolResultContent,
   };
 }
 
 /**
- * Convert tool selection to Ollama chat response format
- *
+ * Convert unified response to Ollama chat response format
+ * 
+ * Handles three response types:
+ * - tool_call: Returns assistant message with tool_calls array
+ * - answer: Returns assistant message with content (from tool results)
+ * - chat: Returns assistant message with content (conversational)
+ * 
  * Key differences from OpenAI:
  * - tool_calls.arguments is an Object, not a JSON string
  * - No tool_calls.id field
  * - Timing metadata in nanoseconds
  */
-export function convertToolSelectionToOllama(
-  toolSelection: ToolSelection,
+export function convertUnifiedResponseToOllama(
+  response: UnifiedResponse,
   modelId: string,
   processingTimeMs: number,
 ): OllamaChatResponse {
-  // Handle unknown/invalid tool - return text response instead of tool call
-  if (toolSelection.tool_name === "unknown" || !toolSelection.tool_name) {
-    const message: OllamaMessage = {
-      role: "assistant",
-      content:
-        "申し訳ございません。デバイスまたはアクションが見つかりませんでした。リクエストを言い換えるか、デバイス名を確認していただけますか？例えば「リビングのライトをつけて」や「音量を50に設定」のように言ってみてください。",
+  const totalDurationNs = processingTimeMs * 1_000_000;
+
+  if (response.action === "tool_call") {
+    // Return tool call response
+    const toolCall: OllamaToolCall = {
+      function: {
+        name: response.tool_name,
+        arguments: response.arguments, // Object, not JSON.stringify()!
+      },
     };
 
-    const totalDurationNs = processingTimeMs * 1_000_000;
+    const message: OllamaMessage = {
+      role: "assistant",
+      content: "", // Empty string - client won't display during tool execution
+      tool_calls: [toolCall],
+    };
+
+    return {
+      model: modelId,
+      created_at: new Date().toISOString(),
+      message,
+      done: true,
+      done_reason: "stop",
+      total_duration: totalDurationNs,
+      eval_count: 1,
+      eval_duration: totalDurationNs,
+    };
+  } else {
+    // Return text response (answer or chat)
+    const message: OllamaMessage = {
+      role: "assistant",
+      content: response.content,
+    };
 
     return {
       model: modelId,
@@ -114,35 +107,6 @@ export function convertToolSelectionToOllama(
       eval_duration: totalDurationNs,
     };
   }
-
-  // Build tool call
-  const toolCall: OllamaToolCall = {
-    function: {
-      name: toolSelection.tool_name,
-      arguments: toolSelection.arguments, // Object, not JSON.stringify()!
-    },
-  };
-
-  // Use empty string for in-progress phase
-  // The actual completion message will be generated by LLM on the second request
-  const message: OllamaMessage = {
-    role: "assistant",
-    content: "", // Empty string - HA won't display anything during tool execution
-    tool_calls: [toolCall],
-  };
-
-  const totalDurationNs = processingTimeMs * 1_000_000;
-
-  return {
-    model: modelId,
-    created_at: new Date().toISOString(),
-    message,
-    done: true,
-    done_reason: "stop",
-    total_duration: totalDurationNs,
-    eval_count: 1,
-    eval_duration: totalDurationNs,
-  };
 }
 
 /**

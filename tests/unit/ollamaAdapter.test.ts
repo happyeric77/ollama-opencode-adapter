@@ -1,129 +1,134 @@
 /**
- * Unit tests for Ollama adapter with tool selection
+ * Unit tests for Ollama adapter with unified response
  */
 
 import { describe, it, expect } from 'vitest';
 import {
   extractMessagesAndTools,
-  convertToolSelectionToOllama,
+  convertUnifiedResponseToOllama,
   convertErrorToOllama,
 } from '../../src/adapters/ollamaAdapter.js';
 import type { OllamaChatRequest, OllamaTool } from '../../src/types/ollama.js';
-import type { ToolSelection } from '../../src/types/tool-selection.js';
+import type {
+  UnifiedResponse,
+  ToolCallResponse,
+  AnswerResponse,
+  ChatResponse,
+} from '../../src/types/tool-selection.js';
 
 // Sample tools for testing (mimicking HA's tools)
 const sampleTools: OllamaTool[] = [
   {
     type: 'function',
     function: {
-      name: 'HassTurnOn',
-      description: 'Turns on/opens a device or entity',
+      name: 'TurnOnLight',
+      description: 'Turns on/opens a light',
       parameters: {
         type: 'object',
         required: [],
         properties: {
-          name: { type: 'string', description: 'Name of device' },
-          domain: { type: 'array', items: { type: 'string' }, description: 'Domain of device' }
-        }
-      }
-    }
+          entity: { type: 'string', description: 'Entity ID of light' },
+        },
+      },
+    },
   },
   {
     type: 'function',
     function: {
-      name: 'HassTurnOff',
-      description: 'Turns off/closes a device or entity',
+      name: 'TurnOffLight',
+      description: 'Turns off/closes a light',
       parameters: {
         type: 'object',
         required: [],
         properties: {
-          name: { type: 'string', description: 'Name of device' },
-          domain: { type: 'array', items: { type: 'string' }, description: 'Domain of device' }
-        }
-      }
-    }
+          entity: { type: 'string', description: 'Entity ID of light' },
+        },
+      },
+    },
   },
   {
     type: 'function',
     function: {
-      name: 'HassLightSet',
-      description: 'Sets brightness or color of a light',
+      name: 'GetLiveContext',
+      description: 'Get current status of devices',
       parameters: {
         type: 'object',
-        required: [],
-        properties: {
-          name: { type: 'string' },
-          brightness: { type: 'number', description: 'Brightness 0-100' },
-          color: { type: 'string' }
-        }
-      }
-    }
-  }
+        properties: {},
+      },
+    },
+  },
 ];
 
-describe('Ollama Adapter - Tool Selection', () => {
+describe('Ollama Adapter - Unified Response', () => {
   describe('extractMessagesAndTools', () => {
-    it('should extract system context, user message, and tools', () => {
+    it('should extract system context and conversation history', () => {
       const request: OllamaChatRequest = {
         model: 'gpt-4o',
         messages: [
           {
             role: 'system',
-            content: 'Static Context:\n- names: Light living room\n  domain: light',
+            content: 'You are a helpful home assistant.',
           },
           {
             role: 'user',
-            content: 'turn on the living room light',
+            content: 'Turn on the living room light',
           },
         ],
-        tools: sampleTools
+        tools: sampleTools,
       };
 
       const result = extractMessagesAndTools(request);
 
-      expect(result.systemContext).toBe('Static Context:\n- names: Light living room\n  domain: light');
+      expect(result.systemContext).toBe('You are a helpful home assistant.');
       expect(result.conversationHistory).toHaveLength(1);
       expect(result.conversationHistory[0].role).toBe('user');
-      expect(result.conversationHistory[0].content).toBe('turn on the living room light');
+      expect(result.conversationHistory[0].content).toBe(
+        'Turn on the living room light',
+      );
       expect(result.availableTools).toHaveLength(3);
-      expect(result.availableTools[0].function.name).toBe('HassTurnOn');
-      expect(result.isRepeatedRequest).toBe(false);
+      expect(result.availableTools[0].function.name).toBe('TurnOnLight');
     });
 
     it('should handle request without tools', () => {
       const request: OllamaChatRequest = {
         model: 'gpt-4o',
-        messages: [
-          { role: 'user', content: 'test message' }
-        ]
+        messages: [{ role: 'user', content: 'Hello' }],
       };
 
       const result = extractMessagesAndTools(request);
 
       expect(result.availableTools).toHaveLength(0);
       expect(result.conversationHistory).toHaveLength(1);
-      expect(result.conversationHistory[0].content).toBe('test message');
+      expect(result.conversationHistory[0].content).toBe('Hello');
     });
 
-    it('should detect repeated request pattern', () => {
+    it('should preserve full conversation history', () => {
       const request: OllamaChatRequest = {
         model: 'gpt-4o',
         messages: [
-          { role: 'user', content: 'turn on light' },
-          { 
-            role: 'assistant', 
-            content: 'Turned on Light',
-            tool_calls: [{ 
-              function: { name: 'HassTurnOn', arguments: { name: 'Light' } } 
-            }]
+          { role: 'system', content: 'System prompt' },
+          { role: 'user', content: 'Turn on light' },
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [
+              { function: { name: 'TurnOnLight', arguments: { entity: 'light.living_room' } } },
+            ],
           },
-          { role: 'tool', content: 'success' },
-        ]
+          { role: 'tool', content: 'Light turned on successfully' },
+          { role: 'user', content: 'Is the light on?' },
+        ],
+        tools: sampleTools,
       };
 
       const result = extractMessagesAndTools(request);
 
-      expect(result.isRepeatedRequest).toBe(true);
+      expect(result.systemContext).toBe('System prompt');
+      expect(result.conversationHistory).toHaveLength(4); // Excludes system
+      expect(result.conversationHistory[0].role).toBe('user');
+      expect(result.conversationHistory[1].role).toBe('assistant');
+      expect(result.conversationHistory[2].role).toBe('tool');
+      expect(result.conversationHistory[3].role).toBe('user');
     });
 
     it('should handle multiple system messages', () => {
@@ -132,151 +137,301 @@ describe('Ollama Adapter - Tool Selection', () => {
         messages: [
           { role: 'system', content: 'Context line 1' },
           { role: 'system', content: 'Context line 2' },
-          { role: 'user', content: 'test message' },
+          { role: 'user', content: 'Test message' },
         ],
-        tools: []
+        tools: [],
       };
 
       const result = extractMessagesAndTools(request);
 
       expect(result.systemContext).toBe('Context line 1\nContext line 2');
       expect(result.conversationHistory).toHaveLength(1);
-      expect(result.conversationHistory[0].content).toBe('test message');
+      expect(result.conversationHistory[0].content).toBe('Test message');
+    });
+
+    it('should handle empty tools array', () => {
+      const request: OllamaChatRequest = {
+        model: 'gpt-4o',
+        messages: [{ role: 'user', content: 'Hello' }],
+        tools: [],
+      };
+
+      const result = extractMessagesAndTools(request);
+
+      expect(result.availableTools).toHaveLength(0);
     });
   });
 
-  describe('convertToolSelectionToOllama', () => {
-    it('should convert valid tool selection to Ollama response', () => {
-      const toolSelection: ToolSelection = {
-        tool_name: 'HassTurnOn',
-        arguments: {
-          name: 'Light living room',
-          domain: ['light']
-        }
-      };
+  describe('convertUnifiedResponseToOllama', () => {
+    describe('ToolCallResponse', () => {
+      it('should convert tool_call to Ollama response', () => {
+        const unifiedResponse: ToolCallResponse = {
+          action: 'tool_call',
+          tool_name: 'TurnOnLight',
+          arguments: {
+            entity: 'light.living_room',
+          },
+        };
 
-      const response = convertToolSelectionToOllama(toolSelection, 'gpt-4o', 100);
+        const response = convertUnifiedResponseToOllama(unifiedResponse, 'gpt-4o', 100);
 
-      expect(response.model).toBe('gpt-4o');
-      expect(response.done).toBe(true);
-      expect(response.done_reason).toBe('stop');
-      expect(response.message.role).toBe('assistant');
-      // Content should be empty string for in-progress phase
-      // Completion message will be generated by LLM on second request
-      expect(response.message.content).toBe('');
-      expect(response.message.tool_calls).toBeDefined();
-      expect(response.message.tool_calls).toHaveLength(1);
-
-      const toolCall = response.message.tool_calls![0];
-      expect(toolCall.function.name).toBe('HassTurnOn');
-      
-      // CRITICAL: arguments must be an Object, not a string
-      expect(typeof toolCall.function.arguments).toBe('object');
-      expect(toolCall.function.arguments).toEqual({
-        name: 'Light living room',
-        domain: ['light']
-      });
-
-      // Check timing metadata is in nanoseconds
-      expect(response.total_duration).toBe(100 * 1_000_000);
-    });
-
-    it('should handle unknown tool gracefully', () => {
-      const toolSelection: ToolSelection = {
-        tool_name: 'unknown',
-        arguments: {}
-      };
-
-      const response = convertToolSelectionToOllama(toolSelection, 'gpt-4o', 100);
-
-      expect(response.message.content).toContain('申し訳ございません');
-      expect(response.message.tool_calls).toBeUndefined();
-      expect(response.done).toBe(true);
-    });
-
-    it('should use empty content for in-progress phase (completion message generated by LLM later)', () => {
-      const testCases = [
-        { 
-          tool: 'HassTurnOn', 
-          args: { name: 'Light' }
-        },
-        { 
-          tool: 'HassTurnOff', 
-          args: { name: 'Fan' }
-        },
-        { 
-          tool: 'HassLightSet', 
-          args: { name: 'Light', brightness: 50 }
-        },
-        { 
-          tool: 'HassMediaPause', 
-          args: { name: 'Speaker' }
-        },
-        { 
-          tool: 'HassListAddItem', 
-          args: { item: 'milk', name: 'Shopping' }
-        },
-      ];
-
-      testCases.forEach(({ tool, args }) => {
-        const response = convertToolSelectionToOllama(
-          { tool_name: tool, arguments: args },
-          'gpt-4o',
-          100
-        );
-        // In-progress phase should have empty content
-        // Completion message will be generated by OpencodeService.generateCompletionMessage()
-        expect(response.message.content).toBe('');
+        expect(response.model).toBe('gpt-4o');
+        expect(response.done).toBe(true);
+        expect(response.done_reason).toBe('stop');
+        expect(response.message.role).toBe('assistant');
+        expect(response.message.content).toBe(''); // Empty during tool execution
         expect(response.message.tool_calls).toBeDefined();
         expect(response.message.tool_calls).toHaveLength(1);
+
+        const toolCall = response.message.tool_calls![0];
+        expect(toolCall.function.name).toBe('TurnOnLight');
+
+        // CRITICAL: arguments must be an Object, not a string
+        expect(typeof toolCall.function.arguments).toBe('object');
+        expect(toolCall.function.arguments).toEqual({
+          entity: 'light.living_room',
+        });
+
+        // Check timing metadata is in nanoseconds
+        expect(response.total_duration).toBe(100 * 1_000_000);
+        expect(response.eval_duration).toBe(100 * 1_000_000);
+        expect(response.eval_count).toBe(1);
+      });
+
+      it('should handle tool call with empty arguments', () => {
+        const unifiedResponse: ToolCallResponse = {
+          action: 'tool_call',
+          tool_name: 'GetLiveContext',
+          arguments: {},
+        };
+
+        const response = convertUnifiedResponseToOllama(unifiedResponse, 'gpt-4o', 100);
+
+        expect(response.message.tool_calls).toBeDefined();
+        expect(response.message.tool_calls).toHaveLength(1);
+        expect(response.message.tool_calls![0].function.arguments).toEqual({});
+      });
+
+      it('should handle tool call with complex nested arguments', () => {
+        const unifiedResponse: ToolCallResponse = {
+          action: 'tool_call',
+          tool_name: 'ComplexTool',
+          arguments: {
+            entity: 'light.living_room',
+            config: {
+              brightness: 100,
+              color: 'red',
+            },
+            tags: ['home', 'automation'],
+          },
+        };
+
+        const response = convertUnifiedResponseToOllama(unifiedResponse, 'gpt-4o', 100);
+
+        const toolCall = response.message.tool_calls![0];
+        expect(toolCall.function.arguments).toEqual({
+          entity: 'light.living_room',
+          config: {
+            brightness: 100,
+            color: 'red',
+          },
+          tags: ['home', 'automation'],
+        });
       });
     });
 
-    it('should validate created_at is ISO 8601 format', () => {
-      const toolSelection: ToolSelection = {
-        tool_name: 'HassTurnOn',
-        arguments: { name: 'Light' }
-      };
+    describe('AnswerResponse', () => {
+      it('should convert answer to Ollama response', () => {
+        const unifiedResponse: AnswerResponse = {
+          action: 'answer',
+          content: 'The living room light is currently on.',
+        };
 
-      const response = convertToolSelectionToOllama(toolSelection, 'gpt-4o', 100);
+        const response = convertUnifiedResponseToOllama(unifiedResponse, 'gpt-4o', 100);
 
-      // Check if created_at is valid ISO 8601
-      const date = new Date(response.created_at);
-      expect(date.toISOString()).toBe(response.created_at);
+        expect(response.model).toBe('gpt-4o');
+        expect(response.done).toBe(true);
+        expect(response.done_reason).toBe('stop');
+        expect(response.message.role).toBe('assistant');
+        expect(response.message.content).toBe('The living room light is currently on.');
+        expect(response.message.tool_calls).toBeUndefined();
+
+        // Check timing metadata
+        expect(response.total_duration).toBe(100 * 1_000_000);
+        expect(response.eval_duration).toBe(100 * 1_000_000);
+        expect(response.eval_count).toBe(1);
+      });
+
+      it('should handle multi-language answers', () => {
+        const testCases = [
+          {
+            lang: 'Chinese',
+            content: '客廳的燈現在是開著的。',
+          },
+          {
+            lang: 'Japanese',
+            content: 'リビングのライトがついています。',
+          },
+          {
+            lang: 'English',
+            content: 'The living room light is on.',
+          },
+        ];
+
+        testCases.forEach(({ lang, content }) => {
+          const unifiedResponse: AnswerResponse = {
+            action: 'answer',
+            content,
+          };
+
+          const response = convertUnifiedResponseToOllama(unifiedResponse, 'gpt-4o', 100);
+
+          expect(response.message.content).toBe(content);
+          expect(response.message.tool_calls).toBeUndefined();
+        });
+      });
+
+      it('should handle empty answer content', () => {
+        const unifiedResponse: AnswerResponse = {
+          action: 'answer',
+          content: '',
+        };
+
+        const response = convertUnifiedResponseToOllama(unifiedResponse, 'gpt-4o', 100);
+
+        expect(response.message.content).toBe('');
+        expect(response.message.tool_calls).toBeUndefined();
+      });
     });
 
-    it('should have all required timing fields', () => {
-      const toolSelection: ToolSelection = {
-        tool_name: 'HassTurnOn',
-        arguments: { name: 'Light' }
-      };
+    describe('ChatResponse', () => {
+      it('should convert chat to Ollama response', () => {
+        const unifiedResponse: ChatResponse = {
+          action: 'chat',
+          content: 'Hello! How can I help you today?',
+        };
 
-      const response = convertToolSelectionToOllama(toolSelection, 'gpt-4o', 123);
+        const response = convertUnifiedResponseToOllama(unifiedResponse, 'gpt-4o', 100);
 
-      expect(response.total_duration).toBe(123 * 1_000_000);
-      expect(response.eval_duration).toBe(123 * 1_000_000);
-      expect(response.eval_count).toBe(1);
+        expect(response.model).toBe('gpt-4o');
+        expect(response.done).toBe(true);
+        expect(response.done_reason).toBe('stop');
+        expect(response.message.role).toBe('assistant');
+        expect(response.message.content).toBe('Hello! How can I help you today?');
+        expect(response.message.tool_calls).toBeUndefined();
+
+        // Check timing metadata
+        expect(response.total_duration).toBe(100 * 1_000_000);
+        expect(response.eval_duration).toBe(100 * 1_000_000);
+        expect(response.eval_count).toBe(1);
+      });
+
+      it('should handle conversational greetings', () => {
+        const greetings = [
+          'Hello!',
+          '你好！',
+          'こんにちは！',
+          'Bonjour!',
+        ];
+
+        greetings.forEach((greeting) => {
+          const unifiedResponse: ChatResponse = {
+            action: 'chat',
+            content: greeting,
+          };
+
+          const response = convertUnifiedResponseToOllama(unifiedResponse, 'gpt-4o', 100);
+
+          expect(response.message.content).toBe(greeting);
+          expect(response.message.tool_calls).toBeUndefined();
+        });
+      });
     });
 
-    it('should preserve all tool arguments', () => {
-      const toolSelection: ToolSelection = {
-        tool_name: 'HassLightSet',
-        arguments: {
-          name: 'Light bedroom',
-          brightness: 80,
-          color: 'blue',
-          transition: 2
-        }
-      };
+    describe('Timing Metadata', () => {
+      it('should convert milliseconds to nanoseconds correctly', () => {
+        const response: UnifiedResponse = {
+          action: 'chat',
+          content: 'Test',
+        };
 
-      const response = convertToolSelectionToOllama(toolSelection, 'gpt-4o', 100);
+        const result = convertUnifiedResponseToOllama(response, 'gpt-4o', 123);
 
-      const toolCall = response.message.tool_calls![0];
-      expect(toolCall.function.arguments).toEqual({
-        name: 'Light bedroom',
-        brightness: 80,
-        color: 'blue',
-        transition: 2
+        expect(result.total_duration).toBe(123 * 1_000_000);
+        expect(result.eval_duration).toBe(123 * 1_000_000);
+        expect(result.eval_count).toBe(1);
+      });
+
+      it('should have valid ISO 8601 created_at timestamp', () => {
+        const response: UnifiedResponse = {
+          action: 'chat',
+          content: 'Test',
+        };
+
+        const result = convertUnifiedResponseToOllama(response, 'gpt-4o', 100);
+
+        const date = new Date(result.created_at);
+        expect(date.toISOString()).toBe(result.created_at);
+      });
+    });
+
+    describe('Real-world Scenarios', () => {
+      it('should handle action command scenario', () => {
+        // User: "Turn on the living room light"
+        const unifiedResponse: ToolCallResponse = {
+          action: 'tool_call',
+          tool_name: 'TurnOnLight',
+          arguments: { entity: 'light.living_room' },
+        };
+
+        const response = convertUnifiedResponseToOllama(unifiedResponse, 'gpt-4o', 100);
+
+        expect(response.message.tool_calls).toBeDefined();
+        expect(response.message.tool_calls![0].function.name).toBe('TurnOnLight');
+        expect(response.message.content).toBe(''); // Empty during execution
+      });
+
+      it('should handle query with tool result scenario', () => {
+        // LLM generates answer based on tool result
+        const unifiedResponse: AnswerResponse = {
+          action: 'answer',
+          content: 'Yes, the living room light is currently on.',
+        };
+
+        const response = convertUnifiedResponseToOllama(unifiedResponse, 'gpt-4o', 100);
+
+        expect(response.message.content).toContain('light');
+        expect(response.message.content).toContain('on');
+        expect(response.message.tool_calls).toBeUndefined();
+      });
+
+      it('should handle greeting scenario', () => {
+        // User: "Hello"
+        const unifiedResponse: ChatResponse = {
+          action: 'chat',
+          content: 'Hello! How can I help you today?',
+        };
+
+        const response = convertUnifiedResponseToOllama(unifiedResponse, 'gpt-4o', 100);
+
+        expect(response.message.content).toContain('Hello');
+        expect(response.message.tool_calls).toBeUndefined();
+      });
+
+      it('should handle repeated action without assuming state', () => {
+        // User repeats: "Turn on light" (5 minutes later, might be off)
+        // System should call tool again, not assume it's still on
+        const unifiedResponse: ToolCallResponse = {
+          action: 'tool_call',
+          tool_name: 'TurnOnLight',
+          arguments: { entity: 'light.living_room' },
+        };
+
+        const response = convertUnifiedResponseToOllama(unifiedResponse, 'gpt-4o', 100);
+
+        // Should still return tool call, not assume state
+        expect(response.message.tool_calls).toBeDefined();
+        expect(response.message.tool_calls![0].function.name).toBe('TurnOnLight');
       });
     });
   });
@@ -291,6 +446,14 @@ describe('Ollama Adapter - Tool Selection', () => {
       expect(response.message.role).toBe('assistant');
       expect(response.message.content).toBe('Error: Test error message');
       expect(response.message.tool_calls).toBeUndefined();
+    });
+
+    it('should handle error with special characters', () => {
+      const error = new Error('Error: 無法連接 / Connection failed');
+      const response = convertErrorToOllama(error, 'gpt-4o');
+
+      expect(response.message.content).toContain('無法連接');
+      expect(response.message.content).toContain('Connection failed');
     });
   });
 });
