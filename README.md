@@ -229,11 +229,14 @@ See [OpenCode Providers](https://opencode.ai/docs/providers) for the complete li
 
 ### 3. Full Function Calling Support
 
-The adapter implements function calling (tools) through intelligent prompt engineering:
+The adapter implements function calling (tools) through intelligent LLM-based decision making:
 
 - Parses tool definitions from Ollama API
-- Intelligently selects appropriate tools based on user intent
-- Returns properly formatted tool calls in Ollama format
+- Uses LLM to decide between three response types:
+  - **Tool Call**: Execute an action or query device state
+  - **Answer**: Generate answer based on available tool results
+  - **Chat**: Respond conversationally (greetings, thanks, general chat)
+- Returns properly formatted responses in Ollama format
 - Supports multi-step tool execution
 
 ### 4. Multi-turn Conversations
@@ -242,16 +245,16 @@ Maintains full conversation history:
 
 - Preserves all previous messages (user, assistant, tool results)
 - Context-aware responses based on conversation flow
-- Smart handling of repeated requests
-- Natural language confirmation messages
+- No state assumptions — always checks current state when needed
+- LLM generates natural language responses in user's language
 
 ### 5. Chat-Only Mode
 
 Works perfectly even without tools:
 
-- If no tools are provided, acts as a standard chat interface
-- Automatically detects conversational vs. action requests
-- Falls back gracefully when tool selection is uncertain
+- If no tools are provided, responds conversationally
+- Automatically detects when to use tools vs. chat responses
+- Falls back gracefully when tool execution fails
 
 ### 6. Graceful Error Handling
 

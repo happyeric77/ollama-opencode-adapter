@@ -17,33 +17,34 @@ This document is for developers who want to understand how the adapter works int
 
 ## Why Is This Complex?
 
-You might expect a simple adapter between two APIs to be ~50-100 lines of code. This implementation is ~1,500 lines. Here's why:
+You might expect a simple adapter between two APIs to be ~50-100 lines of code. This implementation is ~1,100 lines. Here's why:
 
-### 1. Manual Function Calling (~400 lines)
+### 1. Unified Response Generation (~300 lines)
 
 **The Problem:**
 - OpenCode doesn't support function calling natively
 - It only has a simple prompt API: send text, get text back
 - Ollama API expects native function calling support
+- Need to decide between tool calls, answers, and chat responses
 
 **Our Solution:**
-- Manually parse tool definitions from Ollama requests
-- Craft prompts that instruct the LLM to select tools
-- Parse JSON responses from unstructured LLM output
-- Handle JSON parsing failures gracefully
-- Validate tool selections against available tools
+- LLM-based unified response generation
+- Single decision point: tool_call, answer, or chat
+- No hardcoded tool type assumptions
+- No state assumptions from conversation history
+- Intelligent handling of tool results
 
 **Code Locations:**
-- `src/services/opencode.ts` — `extractToolSelection()` method (~100 lines)
+- `src/services/opencode.ts` — `generateResponse()` method (~170 lines)
 - `src/adapters/ollamaAdapter.ts` — Format conversions (~150 lines)
-- `src/server.ts` — Tool selection orchestration (~150 lines)
+- `src/server.ts` — Unified flow orchestration (~80 lines)
 
 **Complexity Factors:**
 - LLMs don't always return valid JSON
 - Tool names might be hallucinated
 - Parameter extraction from natural language
 - Multi-language support (detect user's language)
-- Fallback when tool selection fails
+- Fallback when response generation fails
 
 ### 2. Stability & Fallback Mechanisms (~300 lines)
 
@@ -89,26 +90,26 @@ try {
 }
 ```
 
-### 3. Multi-turn Conversation Handling (~400 lines)
+### 3. Multi-turn Conversation Handling (~200 lines)
 
 **The Problem:**
 - Need to preserve conversation history across turns
-- Detect when user wants chat vs tool execution
+- Detect when to use tool calls vs. generate answers vs. chat
 - Handle tool result processing (convert to natural language)
-- Prevent infinite loops from repeated requests
 - Support multi-language conversations
+- Device state can change outside our control
 
 **Our Solution:**
 - Full conversation history preservation (no truncation)
 - Smart context selection (last 10 messages for tool selection)
 - Dedicated `ConversationHelper` service with 6 utility methods
-- LLM-generated completion messages in user's language
-- Repeated request detection and handling
+- LLM generates all responses in user's language
+- No repeated request detection — always check current state
 
 **Code Locations:**
 - `src/services/conversationHelper.ts` — 6 static utility methods (~200 lines)
-- `src/services/opencode.ts` — Conversation handling methods (~100 lines)
-- `src/server.ts` — Multi-turn orchestration (~100 lines)
+- `src/services/opencode.ts` — Unified response generation (~100 lines)
+- `src/server.ts` — Single unified flow (~80 lines)
 
 **Key Features:**
 ```typescript
@@ -144,19 +145,24 @@ ConversationHelper.countMessagesByRole(history);
 **Code Locations:**
 - `src/adapters/ollamaAdapter.ts` — All format conversions (~200 lines)
 
-### 5. Edge Cases & Special Handling (~200 lines)
+### 5. Edge Cases & Design Philosophy (~100 lines)
 
-**Examples of edge cases we handle:**
-- Repeated user requests (detect and confirm completion)
-- Query tool results (GetLiveContext) → generate natural language answers
-- Chat-only mode (no tools provided)
+**Design Philosophy:**
+- **No state assumptions** — Never assume device state from conversation history
+- **Always verify** — Devices can be controlled via other interfaces (physical switches, automation, other apps)
+- **Idempotent operations** — Repeated requests should execute again, not assume previous state
+- **LLM-driven decisions** — Let the LLM decide everything based on current context
+
+**Edge cases we handle:**
 - Invalid tool selection (validate against available tools)
 - Missing or malformed messages
-- Tool results without corresponding user messages
+- Tool results that need natural language answers
 - Multi-language support (detect and respond in same language)
+- No tools provided (chat-only mode)
 
 **Code Locations:**
-- `src/server.ts` — Edge case handling throughout (~200 lines)
+- `src/server.ts` — Unified flow with edge case handling (~80 lines)
+- `src/services/opencode.ts` — Fallback mechanisms (~70 lines)
 
 ## Architecture Overview
 
@@ -170,37 +176,31 @@ ConversationHelper.countMessagesByRole(history);
 3. ollamaAdapter.extractMessagesAndTools()
    - Parse Ollama format
    - Extract system context, conversation history, tools
-   - Detect repeated requests, query tool results
    ↓
 4. ConversationHelper utilities
    - Validate conversation history
    - Build appropriate context
    - Extract user message
    ↓
-5. Route based on request type:
-   
-   a) Query tool result detected?
-      → opencode.sendPrompt() with tool result context
-      → Generate natural language answer
-      → Return as assistant message
-   
-   b) Repeated request detected?
-      → opencode.generateCompletionMessage()
-      → Return confirmation in user's language
-   
-   c) No tools provided (chat-only mode)?
-      → opencode.handleConversation()
-      → Return conversational response
-   
-   d) Normal tool selection flow:
-      → opencode.extractToolSelection()
-      → Parse and validate tool selection
-      → If tool_name === "chat":
-         → opencode.handleConversation()
-      → Else:
-         → ollamaAdapter.convertToolSelectionToOllama()
+5. Unified Response Generation:
+   opencode.generateResponse()
+   - LLM decides: tool_call, answer, or chat
+   - Considers conversation history and available tools
+   - Checks if tool results can answer the question
+   - Returns UnifiedResponse
    ↓
-6. Return Ollama-formatted response to client
+6. Validate tool_call responses
+   - Check tool_name against available tools
+   - Set to "unknown" if invalid
+   ↓
+7. Convert to Ollama format
+   ollamaAdapter.convertUnifiedResponseToOllama()
+   - Handle three response types:
+     • tool_call → Ollama tool_calls format
+     • answer → Assistant message with content
+     • chat → Assistant message with content
+   ↓
+8. Return Ollama-formatted response to client
 ```
 
 ### Component Hierarchy
@@ -241,41 +241,36 @@ ConversationHelper.countMessagesByRole(history);
 - HTTP server setup (Fastify)
 - Endpoint implementations (`/api/chat`, `/api/tags`, etc.)
 - Request validation
-- Flow orchestration (routing to appropriate handlers)
+- Unified flow orchestration
 - Error handling and response formatting
 - Logging
 
 **Key Functions:**
 
-1. **POST /api/chat Handler** (~400 lines)
-   - Main request processing
-   - Calls adapters and services
-   - Routes to different flows based on request type
+1. **POST /api/chat Handler** (~80 lines)
+   - Extract messages and tools
+   - Call unified response generation
+   - Validate tool selections
+   - Convert to Ollama format
+   - Return response
 
-2. **Query Tool Result Handling** (~60 lines)
-   - Detects tool results like GetLiveContext
-   - Generates natural language answers from structured data
-
-3. **Repeated Request Handling** (~65 lines)
-   - Detects when user resends same message
-   - Generates completion confirmation
-
-4. **Chat-Only Mode** (~45 lines)
-   - Handles requests without tools
-   - Direct conversation flow
-
-5. **Normal Tool Selection Flow** (~100 lines)
-   - Extracts tool selection from LLM
-   - Validates and converts to Ollama format
+**Simplification (Phase 4):**
+- **Before**: 476 lines with multiple special case handlers
+  - Query tool result handling (~60 lines)
+  - Repeated request handling (~65 lines)
+  - Chat-only mode handling (~45 lines)
+  - Normal tool selection (~100 lines)
+- **After**: 243 lines with single unified flow
+  - **Removed**: 233 lines of special case code 🎉
+  - **Result**: Single code path for all requests
 
 ### services/opencode.ts
 
 **Responsibilities:**
 - OpenCode SDK wrapper
 - Session lifecycle management
-- Tool selection prompt engineering
-- Conversation handling
-- Completion message generation
+- Unified response generation
+- Fallback mechanisms
 
 **Key Methods:**
 
@@ -289,32 +284,33 @@ ConversationHelper.countMessagesByRole(history);
    - Timeout handling and cleanup
    - Returns: `{content, elapsed}`
 
-3. **extractToolSelection(systemContext, conversationHistory, availableTools)**
-   - Formats tools into LLM prompt
-   - Sends tool selection request
-   - Parses JSON response
-   - Validates tool selection
-   - Returns: JSON string with `{tool_name, arguments}`
+3. **generateResponse(systemContext, conversationHistory, availableTools)**
+   - **NEW unified method** replacing three old methods
+   - Uses LLM to decide response type: tool_call, answer, or chat
+   - Formats tools into LLM-friendly description
+   - Sends unified prompt to LLM
+   - Parses and validates response
+   - Returns: `UnifiedResponse`
 
-4. **handleConversation(conversationHistory, systemContext)**
-   - Builds full conversation prompt
-   - Sends to LLM for conversational response
-   - Returns: Natural language response
+4. **generateAnswerFromToolResult(conversationHistory, systemContext)** (private)
+   - Fallback helper when unified response generation fails
+   - Generates natural language answer from tool result
+   - Returns: Answer string
 
-5. **generateCompletionMessage(conversationHistory, toolName, toolArgs, systemContext)**
-   - Generates completion confirmation in user's language
-   - Uses LLM to create natural message
-   - Returns: Completion message string
+5. **getFallbackChatResponse(userMessage)** (private)
+   - Final fallback for error cases
+   - Detects user language and responds appropriately
+   - Returns: Simple error message in user's language
 
-**Prompt Engineering:**
+**Removed Methods (Phase 3):**
+- ❌ `extractToolSelection()` — Replaced by `generateResponse()`
+- ❌ `handleConversation()` — Now part of `generateResponse()`
+- ❌ `generateCompletionMessage()` — No longer needed (no repeated request detection)
 
-The tool selection prompt is ~70 lines and includes:
-- Available tools description
-- Parameter schemas
-- Priority rules (action → query → chat)
-- Examples for clarity
-- JSON schema enforcement
-- Multi-language support instructions
+**Simplification:**
+- **Before**: 437 lines with three separate methods
+- **After**: 442 lines with unified approach
+- **Result**: More functionality with similar code size, better maintainability
 
 ### services/conversationHelper.ts
 
@@ -372,44 +368,24 @@ The tool selection prompt is ~70 lines and includes:
 
 **Key Functions:**
 
-1. **extractMessagesAndTools(request): ExtractedContext**
+1. **extractMessagesAndTools(request): ExtractionResult**
    - Parses Ollama request body
    - Separates system messages from conversation
    - Extracts tool definitions
-   - Detects repeated requests
-   - Detects query tool results
-   - Returns structured data for processing
+   - Returns: `{systemContext, conversationHistory, availableTools}`
+   - **Simplified in Phase 2**: Removed repeated request and query tool detection
 
-2. **convertToolSelectionToOllama(selection, model, processingTime): OllamaChatResponse**
-   - Converts internal tool selection to Ollama format
-   - Handles both tool calls and chat responses
+2. **convertUnifiedResponseToOllama(response, model, processingTime): OllamaChatResponse**
+   - Converts UnifiedResponse to Ollama format
+   - Handles three response types: tool_call, answer, chat
    - Adds metadata (timing, model info)
+   - **New in Phase 2**: Replaces `convertToolSelectionToOllama()`
 
 3. **convertErrorToOllama(error, model): OllamaChatResponse**
    - Converts errors to Ollama error format
    - Preserves error messages for debugging
 
-**Detection Logic:**
-
-```typescript
-// Repeated request detection
-const userMessages = history.filter(m => m.role === 'user');
-const lastTwo = userMessages.slice(-2);
-const isRepeatedRequest = 
-  lastTwo.length === 2 && 
-  lastTwo[0].content === lastTwo[1].content;
-
-// Query tool result detection  
-const hasToolMessage = history.some(m => m.role === 'tool');
-const lastToolMessage = history
-  .filter(m => m.role === 'tool')
-  .pop();
-const hasQueryToolResult = 
-  hasToolMessage && 
-  lastToolMessage?.content.includes(...);
-```
-
-## Function Calling Implementation
+## Unified Response Implementation
 
 ### The Challenge
 
@@ -458,7 +434,7 @@ Ollama API expects:
 
 ### Our Approach
 
-**Step 1: Format tools for LLM**
+**Step 1: Format tools for LLM** (unchanged)
 
 ```typescript
 function formatToolsForLLM(tools: OllamaTool[]): string {
@@ -476,24 +452,24 @@ ${formatParameters(params.properties, params.required)}
 }
 ```
 
-**Step 2: Craft tool selection prompt**
+**Step 2: Craft unified response prompt**
 
 The prompt includes:
 - System context (from client)
 - Recent conversation history
 - Available tools (formatted above)
 - Current user request
-- Strict JSON schema
-- Priority rules (action → query → chat)
+- Three response types: tool_call, answer, chat
+- Decision rules (see "Unified Response Generation" section)
 - Examples
 
 **Step 3: Send to LLM via OpenCode**
 
 ```typescript
 const response = await this.sendPrompt(
-  "You are a tool selection expert. Respond with valid JSON only.",
+  "You are an intelligent assistant. Respond with valid JSON only.",
   fullPrompt,
-  { sessionTitle: 'tool-selection', maxWaitMs: 30000 }
+  { sessionTitle: 'unified-response', maxWaitMs: 30000 }
 );
 ```
 
@@ -508,30 +484,18 @@ const cleaned = response.content
   .trim();
 
 // Parse JSON
-const toolSelection = JSON.parse(cleaned);
+const unifiedResponse = JSON.parse(cleaned) as UnifiedResponse;
 
-// Validate against available tools
-const isValidTool = availableTools.some(
-  t => t.function.name === toolSelection.tool_name
-);
-
-if (!isValidTool && toolSelection.tool_name !== "chat") {
-  toolSelection.tool_name = "unknown";
+// Validate response action type
+if (!['tool_call', 'answer', 'chat'].includes(unifiedResponse.action)) {
+  throw new Error(`Invalid response action: ${unifiedResponse.action}`);
 }
 ```
 
 **Step 5: Convert to Ollama format**
 
 ```typescript
-if (toolSelection.tool_name === "chat") {
-  // Conversational response
-  return {
-    message: {
-      role: "assistant",
-      content: chatResponse
-    }
-  };
-} else {
+if (unifiedResponse.action === 'tool_call') {
   // Tool call
   return {
     message: {
@@ -539,10 +503,18 @@ if (toolSelection.tool_name === "chat") {
       content: "",
       tool_calls: [{
         function: {
-          name: toolSelection.tool_name,
-          arguments: toolSelection.arguments
+          name: unifiedResponse.tool_name,
+          arguments: unifiedResponse.arguments
         }
       }]
+    }
+  };
+} else if (unifiedResponse.action === 'answer' || unifiedResponse.action === 'chat') {
+  // Answer or conversational response
+  return {
+    message: {
+      role: "assistant",
+      content: unifiedResponse.content
     }
   };
 }
@@ -553,30 +525,37 @@ if (toolSelection.tool_name === "chat") {
 **Invalid JSON:**
 ```typescript
 try {
-  toolSelection = JSON.parse(cleaned);
+  unifiedResponse = JSON.parse(cleaned);
 } catch (err) {
-  // Fallback to chat mode
-  toolSelection = { tool_name: "chat", arguments: {} };
+  // Fallback: Try to generate answer from tool result
+  if (hasToolResult) {
+    const answer = await generateAnswerFromToolResult(...);
+    return {action: 'answer', content: answer};
+  }
+  // Final fallback: Chat response
+  return {action: 'chat', content: getFallbackChatResponse(userMessage)};
 }
 ```
 
 **Hallucinated tool names:**
 ```typescript
-const isValidTool = availableTools.some(
-  t => t.function.name === toolSelection.tool_name
-);
-
-if (!isValidTool) {
-  // Return "unknown" to let client handle
-  toolSelection.tool_name = "unknown";
+if (unifiedResponse.action === 'tool_call') {
+  const isValidTool = availableTools.some(
+    t => t.function.name === unifiedResponse.tool_name
+  );
+  
+  if (!isValidTool && unifiedResponse.tool_name !== "unknown") {
+    // Return "unknown" to let client handle
+    unifiedResponse.tool_name = "unknown";
+  }
 }
 ```
 
-**Ambiguous intent:**
+**Tool result available:**
 ```typescript
-// Prompt includes:
-// "If user's intent is unclear: return {tool_name: 'unknown'}"
-// "When in doubt between action and conversation: prefer 'chat'"
+// LLM checks if tool result answers the question
+// If yes: return {action: 'answer', content: "..."}
+// If no: return {action: 'tool_call', ...} to get more info
 ```
 
 ## Conversation History
@@ -600,45 +579,47 @@ if (!isValidTool) {
     {role: "user", content: "Turn on the light"},
     {role: "assistant", content: "", tool_calls: [...]},
     {role: "tool", content: "Light turned on"},
-    {role: "user", content: "Turn on the light"}  // Repeated request
+    {role: "user", content: "Is the light on?"}  // New question
   ]
 }
 
 // 2. Extract and categorize
-const {systemContext, conversationHistory} = extractMessagesAndTools(body);
+const {systemContext, conversationHistory, availableTools} = extractMessagesAndTools(body);
 
 // systemContext: "You are a helpful assistant"
 // conversationHistory: [
 //   {role: "user", content: "Turn on the light"},
 //   {role: "assistant", content: "", tool_calls: [...]},
 //   {role: "tool", content: "Light turned on"},
-//   {role: "user", content: "Turn on the light"}
+//   {role: "user", content: "Is the light on?"}
 // ]
 
-// 3. For tool selection: use recent context (last 10 messages)
+// 3. For unified response: use recent context (last 10 messages)
 const recentContext = ConversationHelper.buildToolSelectionContext(
   conversationHistory,
   10
 );
 
-// 4. For conversation: use full history (no limit)
-const fullPrompt = ConversationHelper.buildConversationPrompt(
+// 4. Generate unified response
+const unifiedResponse = await opencodeService.generateResponse(
+  systemContext,
   conversationHistory,
-  systemContext
+  availableTools
 );
+
+// LLM sees tool result and decides:
+// {action: 'answer', content: 'Yes, the light is currently on.'}
 ```
 
 ### Why Separate Contexts?
 
-**Tool Selection (last 10 messages):**
+**Unified Response Generation (last 10 messages):**
 - **Speed** — Less tokens = faster response
-- **Focus** — Recent context is most relevant for tool choice
+- **Focus** — Recent context is most relevant for decision
 - **Cost** — Fewer tokens = lower API cost
+- **Efficiency** — Handles both tool selection and answer generation
 
-**Conversation (all messages):**
-- **Quality** — Full context for better responses
-- **Coherence** — Maintain conversation thread
-- **Cloud models have large context** — GPT-4o supports 128k tokens
+**Note**: We no longer have separate "tool selection" and "conversation" modes. The unified approach handles everything.
 
 ### ConversationHelper Methods
 
@@ -677,70 +658,71 @@ ${conversationText}
 Current date/time: ${new Date().toISOString()}`;
 ```
 
-### Repeated Request Detection
+## Unified Response Generation
 
-**Pattern:**
+### Design Philosophy
+
+**Key Insight**: Device state can change outside our control through:
+- Physical switches
+- Automation rules  
+- Other apps/interfaces
+- Time passing
+
+**Therefore**: Never assume device state from conversation history.
+
+**Approach**: Let LLM decide everything based on current context using a unified prompt.
+
+### Three Response Types
+
+**1. TOOL_CALL** - Execute an action or query
 ```typescript
-// User sends same message twice → means tool was executed
-// We should confirm completion, not execute again
-
-const userMessages = history.filter(m => m.role === 'user');
-const lastTwo = userMessages.slice(-2);
-const isRepeatedRequest = 
-  lastTwo.length === 2 && 
-  lastTwo[0].content === lastTwo[1].content;
-
-if (isRepeatedRequest) {
-  // Generate completion message
-  const completionMessage = await opencode.generateCompletionMessage(
-    conversationHistory,
-    toolName,
-    toolArgs,
-    systemContext
-  );
-  
-  return {
-    message: {
-      role: "assistant",
-      content: completionMessage  // e.g., "客廳的燈已經開啟了"
-    }
-  };
+{
+  action: "tool_call",
+  tool_name: "CallService",
+  arguments: {domain: "light", service: "turn_on", ...}
 }
 ```
 
-## Tool Selection Strategy
+**2. ANSWER** - Generate answer from tool results
+```typescript
+{
+  action: "answer",
+  content: "是的，客廳的燈現在是開著的"
+}
+```
 
-### Priority Rules
+**3. CHAT** - Conversational response
+```typescript
+{
+  action: "chat",
+  content: "Hello! How can I help you?"
+}
+```
 
-The prompt enforces this priority order:
+### Decision Rules
 
-**1. ACTION REQUEST (highest priority)**
-- User wants to perform an action
-- Select the most appropriate action tool
-- Extract parameters from user request and context
+The unified prompt enforces this decision flow:
 
-Examples:
-- "Turn on the living room light" → `{tool_name: "SetLight", arguments: {...}}`
-- "Set temperature to 72" → `{tool_name: "SetTemperature", arguments: {...}}`
+**1. Check conversation history:**
+- If last message is a tool result, analyze if it answers the user's question
+- **IMPORTANT**: Tool results show state at execution time, but state may have changed
+- If tool result answers the question, return ANSWER with natural language explanation
+- If tool result doesn't fully answer, consider calling another tool
 
-**2. INFORMATION QUERY**
-- User asks about status or information
-- Look for query-type tools (Get*, Query*, Fetch*, *Status, *Context)
-- If query tool exists, use it
-- If no query tool exists, use "chat"
+**2. Check user intent:**
+- **ACTION REQUEST** (turn on/off, set, adjust, control) → TOOL_CALL
+- **INFORMATION QUERY** (is X on?, what's the status?, get data) → TOOL_CALL (use query tools)
+- **CONVERSATION** (greetings, thanks, general chat) → CHAT
 
-Examples:
-- "Is the light on?" + GetLiveContext available → `{tool_name: "GetLiveContext", arguments: {}}`
-- "What time is it?" + no time tool → `{tool_name: "chat", arguments: {}}`
+**3. When in doubt about device state:**
+- DO NOT assume state from conversation history
+- Prefer calling query tools (Get*, Query*, Fetch*, *Status, *Context) to check current state
+- Devices can be controlled via other interfaces
 
-**3. CONVERSATION (lowest priority)**
-- Greetings, thanks, general chat
-- Always return `{tool_name: "chat", arguments: {}}`
-
-Examples:
-- "Hello" → chat
-- "Thank you" → chat
-- "Tell me a joke" → chat
+**4. Handling repeated requests:**
+- If user requests the same action again, **EXECUTE IT AGAIN** (don't assume state)
+- Example: User says "開燈" → executed → 5 mins later says "開燈" → **EXECUTE AGAIN**
+- Rationale: Device may have been turned off by automation or physical switch
 
 ### Prompt Engineering Details
 
@@ -748,12 +730,25 @@ Examples:
 ```
 CRITICAL: Respond with VALID JSON ONLY. No markdown, no explanations, no code blocks.
 
-Response Schema:
+Response Schema - You must choose ONE of these three response types:
+
+1. TOOL_CALL:
 {
-  "tool_name": "exact tool name from available tools OR 'chat' for conversation",
-  "arguments": {
-    // parameters as defined in the tool schema (only if tool_name is not 'chat')
-  }
+  "action": "tool_call",
+  "tool_name": "exact tool name from available tools",
+  "arguments": { ... }
+}
+
+2. ANSWER:
+{
+  "action": "answer",
+  "content": "natural language answer based on tool results"
+}
+
+3. CHAT:
+{
+  "action": "chat",
+  "content": "natural conversational response"
 }
 ```
 
@@ -763,19 +758,25 @@ Response Schema:
 - Use information from the system context when needed
 - Match parameter types exactly as defined in tool schema
 - For array types, use array format: ["value1", "value2"]
-- Do not include optional parameters if not mentioned by user
 ```
 
 **Examples in Prompt:**
 ```
 User: "hello"
-→ {"tool_name": "chat", "arguments": {}}
+→ {"action": "chat", "content": "Hello! How can I help you?"}
 
-User: "is the light on?" (GetLiveContext available)
-→ {"tool_name": "GetLiveContext", "arguments": {}}
+User: "開客廳的燈"
+→ {"action": "tool_call", "tool_name": "CallService", "arguments": {...}}
 
-User: "現在客廳燈是開著的嗎" (GetLiveContext available)
-→ {"tool_name": "GetLiveContext", "arguments": {}}
+User: "客廳的燈是開著的嗎" (GetLiveContext available)
+→ {"action": "tool_call", "tool_name": "GetLiveContext", "arguments": {}}
+
+[After GetLiveContext returns: "客廳燈: 開啟"]
+→ {"action": "answer", "content": "是的，客廳的燈現在是開著的"}
+
+User: "開燈" (light already turned on 5 minutes ago in history)
+→ {"action": "tool_call", "tool_name": "CallService", "arguments": {...}}
+(Reason: Don't assume it's still on - it may have been turned off by automation)
 ```
 
 ### Handling Ambiguity
