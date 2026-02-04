@@ -82,7 +82,9 @@ describe('Ollama Adapter - Tool Selection', () => {
       const result = extractMessagesAndTools(request);
 
       expect(result.systemContext).toBe('Static Context:\n- names: Light living room\n  domain: light');
-      expect(result.userMessage).toBe('turn on the living room light');
+      expect(result.conversationHistory).toHaveLength(1);
+      expect(result.conversationHistory[0].role).toBe('user');
+      expect(result.conversationHistory[0].content).toBe('turn on the living room light');
       expect(result.availableTools).toHaveLength(3);
       expect(result.availableTools[0].function.name).toBe('HassTurnOn');
       expect(result.isRepeatedRequest).toBe(false);
@@ -99,7 +101,8 @@ describe('Ollama Adapter - Tool Selection', () => {
       const result = extractMessagesAndTools(request);
 
       expect(result.availableTools).toHaveLength(0);
-      expect(result.userMessage).toBe('test message');
+      expect(result.conversationHistory).toHaveLength(1);
+      expect(result.conversationHistory[0].content).toBe('test message');
     });
 
     it('should detect repeated request pattern', () => {
@@ -137,7 +140,8 @@ describe('Ollama Adapter - Tool Selection', () => {
       const result = extractMessagesAndTools(request);
 
       expect(result.systemContext).toBe('Context line 1\nContext line 2');
-      expect(result.userMessage).toBe('test message');
+      expect(result.conversationHistory).toHaveLength(1);
+      expect(result.conversationHistory[0].content).toBe('test message');
     });
   });
 

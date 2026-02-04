@@ -3,23 +3,36 @@
  * Converts between Ollama API format and internal ToolSelection format
  */
 
-import type { OllamaChatRequest, OllamaChatResponse, OllamaMessage, OllamaToolCall } from '../types/ollama.js';
-import type { ToolSelection, ExtractionResult } from '../types/tool-selection.js';
+import type {
+  OllamaChatRequest,
+  OllamaChatResponse,
+  OllamaMessage,
+  OllamaToolCall,
+} from "../types/ollama.js";
+import type {
+  ToolSelection,
+  ExtractionResult,
+} from "../types/tool-selection.js";
 
 /**
  * Extract messages, tools, and detect repeated requests from Ollama chat request
  */
-export function extractMessagesAndTools(request: OllamaChatRequest): ExtractionResult {
-  let systemContext = '';
-  let userMessage = '';
+export function extractMessagesAndTools(
+  request: OllamaChatRequest,
+): ExtractionResult {
+  let systemContext = "";
 
+  // Extract system messages into systemContext
   for (const msg of request.messages) {
-    if (msg.role === 'system') {
-      systemContext += msg.content + '\n';
-    } else if (msg.role === 'user') {
-      userMessage = msg.content;
+    if (msg.role === "system") {
+      systemContext += msg.content + "\n";
     }
   }
+
+  // Extract conversation history (exclude system messages)
+  const conversationHistory = request.messages.filter(
+    (msg) => msg.role !== "system",
+  );
 
   // Check for repeated request pattern
   // HA sends: [..., assistant (with tool_calls), tool, assistant (with tool_calls), tool, ...]
@@ -28,22 +41,23 @@ export function extractMessagesAndTools(request: OllamaChatRequest): ExtractionR
   let isRepeatedRequest = false;
   let hasQueryToolResult = false;
   let toolResultContent: string | undefined;
-  
+
   if (request.messages.length >= 2) {
     const lastMsg = request.messages[request.messages.length - 1];
     const secondLastMsg = request.messages[request.messages.length - 2];
-    
+
     // If last message is 'tool' result and second last is our assistant response with tool_calls
     // This means HA executed the tool and is asking us again
-    if (lastMsg?.role === 'tool' &&
-        secondLastMsg?.role === 'assistant' && 
-        secondLastMsg.tool_calls && 
-        secondLastMsg.tool_calls.length > 0) {
-      
+    if (
+      lastMsg?.role === "tool" &&
+      secondLastMsg?.role === "assistant" &&
+      secondLastMsg.tool_calls &&
+      secondLastMsg.tool_calls.length > 0
+    ) {
       // Check if the tool was a QUERY tool (needs answer) or CONTROL tool (already done)
       const toolName = secondLastMsg.tool_calls[0]?.function?.name;
-      const queryTools = ['GetLiveContext', 'GetDateTime', 'todo_get_items'];
-      
+      const queryTools = ["GetLiveContext", "GetDateTime", "todo_get_items"];
+
       if (toolName && queryTools.includes(toolName)) {
         // This is a query tool - we need to use the result to answer the user
         isRepeatedRequest = false;
@@ -58,7 +72,7 @@ export function extractMessagesAndTools(request: OllamaChatRequest): ExtractionR
 
   return {
     systemContext: systemContext.trim(),
-    userMessage: userMessage.trim(),
+    conversationHistory,
     availableTools: request.tools || [],
     isRepeatedRequest,
     hasQueryToolResult,
@@ -68,7 +82,7 @@ export function extractMessagesAndTools(request: OllamaChatRequest): ExtractionR
 
 /**
  * Convert tool selection to Ollama chat response format
- * 
+ *
  * Key differences from OpenAI:
  * - tool_calls.arguments is an Object, not a JSON string
  * - No tool_calls.id field
@@ -77,14 +91,14 @@ export function extractMessagesAndTools(request: OllamaChatRequest): ExtractionR
 export function convertToolSelectionToOllama(
   toolSelection: ToolSelection,
   modelId: string,
-  processingTimeMs: number
+  processingTimeMs: number,
 ): OllamaChatResponse {
-  
   // Handle unknown/invalid tool - return text response instead of tool call
-  if (toolSelection.tool_name === 'unknown' || !toolSelection.tool_name) {
+  if (toolSelection.tool_name === "unknown" || !toolSelection.tool_name) {
     const message: OllamaMessage = {
-      role: 'assistant',
-      content: "申し訳ございません。デバイスまたはアクションが見つかりませんでした。リクエストを言い換えるか、デバイス名を確認していただけますか？例えば「リビングのライトをつけて」や「音量を50に設定」のように言ってみてください。",
+      role: "assistant",
+      content:
+        "申し訳ございません。デバイスまたはアクションが見つかりませんでした。リクエストを言い換えるか、デバイス名を確認していただけますか？例えば「リビングのライトをつけて」や「音量を50に設定」のように言ってみてください。",
     };
 
     const totalDurationNs = processingTimeMs * 1_000_000;
@@ -94,7 +108,7 @@ export function convertToolSelectionToOllama(
       created_at: new Date().toISOString(),
       message,
       done: true,
-      done_reason: 'stop',
+      done_reason: "stop",
       total_duration: totalDurationNs,
       eval_count: 1,
       eval_duration: totalDurationNs,
@@ -106,14 +120,14 @@ export function convertToolSelectionToOllama(
     function: {
       name: toolSelection.tool_name,
       arguments: toolSelection.arguments, // Object, not JSON.stringify()!
-    }
+    },
   };
 
   // Use empty string for in-progress phase
   // The actual completion message will be generated by LLM on the second request
   const message: OllamaMessage = {
-    role: 'assistant',
-    content: '',  // Empty string - HA won't display anything during tool execution
+    role: "assistant",
+    content: "", // Empty string - HA won't display anything during tool execution
     tool_calls: [toolCall],
   };
 
@@ -124,7 +138,7 @@ export function convertToolSelectionToOllama(
     created_at: new Date().toISOString(),
     message,
     done: true,
-    done_reason: 'stop',
+    done_reason: "stop",
     total_duration: totalDurationNs,
     eval_count: 1,
     eval_duration: totalDurationNs,
@@ -136,10 +150,10 @@ export function convertToolSelectionToOllama(
  */
 export function convertErrorToOllama(
   error: Error,
-  modelId: string
+  modelId: string,
 ): OllamaChatResponse {
   const message: OllamaMessage = {
-    role: 'assistant',
+    role: "assistant",
     content: `Error: ${error.message}`,
   };
 
@@ -148,7 +162,7 @@ export function convertErrorToOllama(
     created_at: new Date().toISOString(),
     message,
     done: true,
-    done_reason: 'stop',
+    done_reason: "stop",
     total_duration: 0,
   };
 

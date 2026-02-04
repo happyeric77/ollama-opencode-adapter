@@ -12,6 +12,7 @@ import type {
 } from "./types/ollama.js";
 import type { ToolSelection } from "./types/tool-selection.js";
 import { getOpencodeService } from "./services/opencode.js";
+import { ConversationHelper } from "./services/conversationHelper.js";
 import {
   extractMessagesAndTools,
   convertToolSelectionToOllama,
@@ -48,36 +49,6 @@ export async function createServer() {
     async (request, reply) => {
       const startTime = Date.now();
 
-      // Helper function to generate chat response (used for both chat-only mode and "chat" tool)
-      const generateChatResponse = async (
-        userMessage: string,
-        systemContext: string,
-        model: string
-      ): Promise<OllamaChatResponse> => {
-        const opencodeService = getOpencodeService();
-        const chatResponse = await opencodeService.handleConversation(
-          userMessage,
-          systemContext
-        );
-        
-        const processingTimeMs = Date.now() - startTime;
-        const totalDurationNs = processingTimeMs * 1_000_000;
-        
-        return {
-          model,
-          created_at: new Date().toISOString(),
-          message: {
-            role: 'assistant',
-            content: chatResponse,
-          },
-          done: true,
-          done_reason: 'stop',
-          total_duration: totalDurationNs,
-          eval_count: 1,
-          eval_duration: totalDurationNs,
-        };
-      };
-
       try {
         const body = request.body;
 
@@ -102,28 +73,36 @@ export async function createServer() {
         // Extract messages, tools, and detect repeated requests
         const {
           systemContext,
-          userMessage,
+          conversationHistory,
           availableTools,
           isRepeatedRequest,
           hasQueryToolResult,
           toolResultContent,
         } = extractMessagesAndTools(body);
 
+        // Validate conversation history
+        const userMessage = ConversationHelper.getLastUserMessage(conversationHistory);
         if (!userMessage) {
           return reply.code(400).send({
             error: "At least one user message is required",
           });
         }
+        
+        const messageCounts = ConversationHelper.countMessagesByRole(conversationHistory);
 
         fastify.log.info(
           {
             systemContextLength: systemContext.length,
-            userMessage,
+            conversationLength: conversationHistory.length,
+            userMessages: messageCounts.user,
+            assistantMessages: messageCounts.assistant,
+            toolMessages: messageCounts.tool,
+            lastUserMessage: userMessage,
             toolsAvailable: availableTools.length,
             isRepeatedRequest,
             hasQueryToolResult,
           },
-          "Extracted context and user message",
+          "Extracted context and conversation history",
         );
 
         // ============ Handle query tool results ============
@@ -207,7 +186,7 @@ CRITICAL: Detect the user's language and respond in the SAME language.
               // Use LLM to generate natural completion message in user's language
               const opencodeService = getOpencodeService();
               const completionMessage = await opencodeService.generateCompletionMessage(
-                userMessage,
+                conversationHistory,
                 toolCall.function.name,
                 toolCall.function.arguments,
                 systemContext
@@ -280,11 +259,28 @@ CRITICAL: Detect the user's language and respond in the SAME language.
           fastify.log.info("No tools provided, using chat-only mode");
           
           try {
-            const response = await generateChatResponse(
-              userMessage,
-              systemContext,
-              body.model || config.modelId
+            const opencodeService = getOpencodeService();
+            const chatResponse = await opencodeService.handleConversation(
+              conversationHistory,
+              systemContext
             );
+            
+            const processingTimeMs = Date.now() - startTime;
+            const totalDurationNs = processingTimeMs * 1_000_000;
+            
+            const response: OllamaChatResponse = {
+              model: body.model || config.modelId,
+              created_at: new Date().toISOString(),
+              message: {
+                role: 'assistant',
+                content: chatResponse,
+              },
+              done: true,
+              done_reason: 'stop',
+              total_duration: totalDurationNs,
+              eval_count: 1,
+              eval_duration: totalDurationNs,
+            };
             
             fastify.log.info({ response: response.message.content }, "Sending chat-only response");
             return reply.code(200).send(response);
@@ -310,7 +306,7 @@ CRITICAL: Detect the user's language and respond in the SAME language.
         const opencodeService = getOpencodeService();
         const toolSelectionStr = await opencodeService.extractToolSelection(
           systemContext,
-          userMessage,
+          conversationHistory,
           availableTools,
         );
 
@@ -341,11 +337,28 @@ CRITICAL: Detect the user's language and respond in the SAME language.
           fastify.log.info("Detected conversational request, generating chat response");
           
           try {
-            const response = await generateChatResponse(
-              userMessage,
-              systemContext,
-              body.model || config.modelId
+            const opencodeService = getOpencodeService();
+            const chatResponse = await opencodeService.handleConversation(
+              conversationHistory,
+              systemContext
             );
+            
+            const processingTimeMs = Date.now() - startTime;
+            const totalDurationNs = processingTimeMs * 1_000_000;
+            
+            const response: OllamaChatResponse = {
+              model: body.model || config.modelId,
+              created_at: new Date().toISOString(),
+              message: {
+                role: 'assistant',
+                content: chatResponse,
+              },
+              done: true,
+              done_reason: 'stop',
+              total_duration: totalDurationNs,
+              eval_count: 1,
+              eval_duration: totalDurationNs,
+            };
             
             fastify.log.info({ response: response.message.content }, "Sending chat response");
             return reply.code(200).send(response);

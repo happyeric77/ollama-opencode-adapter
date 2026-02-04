@@ -1,261 +1,659 @@
 # ollama-opencode-adapter
 
-> Universal adapter implementing Ollama-compatible API using OpenCode SDK with manual function calling support
+> Use cloud-based LLMs with any Ollama-compatible application — no powerful hardware required
 
 ## What Is This?
 
-This is a **protocol adapter** that allows applications expecting Ollama's API (with native function calling) to use OpenCode SDK instead.
+An adapter that implements the Ollama API, allowing any Ollama-compatible application to use **75+ cloud LLM providers** through OpenCode. Works seamlessly with Home Assistant, n8n, and any other tool that supports Ollama.
 
-**The Problem:**
-- **Standard**: Ollama API with native function calling (what apps expect)
-- **Reality**: OpenCode SDK with simple prompt API (what we have)
-- **Gap**: OpenCode doesn't support function calling natively
+**In Simple Terms:**
 
-**The Solution:**
-- Implement Ollama API endpoints (`/api/chat`, etc.)
-- Manually parse tools and user intent via prompt engineering
-- Invoke OpenCode to make tool selection decisions
-- Convert responses back to Ollama format
+- Your app thinks it's talking to Ollama
+- The adapter translates requests to OpenCode
+- OpenCode routes them to your chosen cloud provider (OpenAI, Anthropic, GitHub Copilot, etc.)
+- You get powerful cloud models without running anything locally
 
-## Why Is This Complex?
+## Why Use This?
 
-You might expect ~50 lines for format conversion. We have ~500 lines because:
+### The Problem with Native Ollama
 
-1. **Manual Function Calling** (~200 lines)
-   - OpenCode doesn't support function calling
-   - We must prompt the LLM to select tools
-   - We must parse JSON from unstructured text responses
+Running Ollama locally requires:
 
-2. **Stability & Fallback** (~100 lines)
-   - OpenCode can timeout or become unresponsive
-   - We implement timeouts, retries, fallback mechanisms
-   - Graceful degradation when OpenCode is unavailable
+- Powerful hardware (GPU with sufficient VRAM)
+- Large disk space for model weights
+- Limited to models that can run on your hardware
+- Self-managed model updates
 
-3. **Multi-turn Conversations** (~100 lines)
-   - Detect when user wants chat vs tool execution
-   - Handle tool result processing (convert to natural language)
-   - Prevent infinite loops from repeated requests
+### The Solution: Cloud LLMs via OpenCode
 
-4. **Format Conversions** (~100 lines)
-   - Ollama format ↔ internal format ↔ OpenCode format
-   - Tool schema transformations
-   - Error handling and logging
+This adapter lets you use:
 
-## Architecture
+- **75+ cloud providers** including OpenAI, Anthropic, GitHub Copilot, AWS Bedrock, Google Vertex AI, and more
+- **Latest models** like GPT-5.2, Claude 4.5 Sonnet, Gemini 3 Pro
+- **Flexible authentication** — OAuth (Google Antigravity, GitHub Copilot, OpenAI), API keys (OpenAI, Claude, ...etc), or Enterprise (AWS IAM, Google Service Accounts)
+- **No hardware requirements** — runs on a Raspberry Pi or any low-power device
+- **100% Ollama-compatible** — drop-in replacement, no app modifications needed
 
-```
-┌─────────────────┐
-│  Client App     │  (e.g., Home Assistant, Custom App)
-│  (Ollama API)   │
-└────────┬────────┘
-         │ POST /api/chat
-         │ {messages, tools}
-         ▼
-┌─────────────────────────────────────────┐
-│  ollama-opencode-adapter (this project) │
-│                                         │
-│  1. Parse Ollama request                │
-│  2. Extract system context & tools      │
-│  3. Call OpenCode for tool selection    │
-│  4. Parse response, detect intent       │
-│  5. Return Ollama-formatted response    │
-└────────┬────────────────────────────────┘
-         │ OpenCode SDK
-         ▼
-┌─────────────────┐
-│  OpenCode       │  (port 7272)
-│  Server         │
-└─────────────────┘
-```
+### Key Advantages
 
-## Use Cases
+| Feature        | Native Ollama           | This Adapter                  |
+| -------------- | ----------------------- | ----------------------------- |
+| Hardware       | Powerful GPU required   | Any device (even RPi)         |
+| Models         | Limited to local models | 75+ cloud providers           |
+| Authentication | N/A                     | OAuth/API keys/Enterprise     |
+| Setup          | Download GBs of weights | Configure once, use instantly |
+| Cost           | Hardware investment     | Pay-per-use (or free tiers)   |
+| Privacy        | Fully local             | Cloud-based                   |
 
-### Example 1: Home Assistant
-
-Home Assistant's Ollama integration can point to this adapter to leverage OpenCode/GitHub Copilot for voice assistant functionality.
-
-```yaml
-# Home Assistant configuration.yaml
-conversation:
-  - platform: ollama
-    url: http://localhost:3000  # ← This adapter
-    model: gpt-4o
-```
-
-### Example 2: Custom Tool-Based App
-
-Any application that:
-- Has defined tools/functions
-- Wants to use OpenCode/GitHub Copilot
-- Expects Ollama-compatible API
-
-Can use this adapter without modifications.
-
-## Installation & Setup
+## Quick Start
 
 ### Prerequisites
 
-1. **OpenCode Server** running on port 7272
+1. **OpenCode CLI** installed and running
+
    ```bash
+   # Install OpenCode (if not already installed)
+   npm install -g @opencode-ai/cli
+
+   # Start OpenCode server
    opencode serve --port 7272
    ```
 
-2. **Node.js v22+**
+2. **Node.js v22+** installed
 
-### Setup
+### Step 1: Authenticate with OpenCode (One-time Setup)
 
-1. Clone and install:
-   ```bash
-   git clone <repo>
-   cd ollama-opencode-adapter
-   npm install
-   ```
-
-2. Configure environment:
-   ```bash
-   cp .env.example .env
-   # Edit .env with your settings
-   ```
-
-3. Run:
-   ```bash
-   npm run dev   # Development
-   npm run build && npm start  # Production
-   ```
-
-## Configuration
+Authentication happens in OpenCode, not in this adapter. You only need to do this once:
 
 ```bash
-# Server
+# Open OpenCode CLI
+opencode
+
+# Connect to your preferred provider
+/connect
+
+# Follow the prompts to select a provider:
+# - GitHub Copilot (OAuth, recommended for personal use)
+# - OpenAI (API key)
+# - Anthropic (API key)
+# - AWS Bedrock (IAM credentials)
+# - Google Vertex AI (Service Account)
+# ... and 70+ more options
+```
+
+After authentication, OpenCode stores your credentials securely. The adapter will use these credentials automatically.
+
+### Step 2: Install and Configure the Adapter
+
+```bash
+# Clone the repository
+git clone https://github.com/happyeric77/ollama-opencode-adapter
+cd ollama-opencode-adapter
+
+# Install dependencies
+npm install
+
+# Copy environment configuration
+cp .env.example .env
+
+# Edit .env to select your provider and model
+nano .env
+```
+
+**Example `.env` configuration:**
+
+```bash
+# Server settings
 PORT=3000
 HOST=0.0.0.0
 LOG_LEVEL=info
 
-# OpenCode
+# OpenCode connection
 OPENCODE_URL=http://localhost
 OPENCODE_PORT=7272
 
-# Model
+# Model selection (choose the provider you authenticated with)
 MODEL_PROVIDER=github-copilot
 MODEL_ID=gpt-4o
 
-# Optional: API Key for securing the proxy
-# API_KEY=your-secret-key-here
+# Popular provider examples:
+# MODEL_PROVIDER=openai
+# MODEL_ID=gpt-4o
+
+# MODEL_PROVIDER=anthropic
+# MODEL_ID=claude-3-5-sonnet-20241022
+
+# MODEL_PROVIDER=deepseek
+# MODEL_ID=deepseek-chat
+```
+
+**Important:** `MODEL_PROVIDER` and `MODEL_ID` just tell the adapter which provider to use. Authentication is handled by OpenCode (see Step 1).
+
+### Step 3: Start the Adapter
+
+```bash
+# Development mode (with auto-reload)
+npm run dev
+
+# Production mode
+npm run build
+npm start
+```
+
+The adapter will be available at `http://localhost:3000` with full Ollama API compatibility.
+
+### Step 4: Connect Your Application
+
+Point your Ollama-compatible app to the adapter:
+
+**Home Assistant Example:**
+
+```yaml
+# configuration.yaml
+conversation:
+  - platform: ollama
+    url: http://localhost:3000 # ← Point to the adapter
+    model: gpt-4o # ← Match MODEL_ID in .env
+```
+
+**n8n Example:**
+
+In your n8n Ollama node configuration:
+
+- Base URL: `http://localhost:3000`
+- Model: `gpt-4o`
+
+**Generic Ollama Client:**
+
+```bash
+# Any tool using Ollama API
+export OLLAMA_HOST=http://localhost:3000
+```
+
+That's it! Your application now uses cloud LLMs through the Ollama API.
+
+## How It Works
+
+```
+┌─────────────────────┐
+│   Your Application  │  (Home Assistant, n8n, etc.)
+│   (Ollama API)      │
+└──────────┬──────────┘
+           │ POST /api/chat
+           │ {messages, tools}
+           ▼
+┌─────────────────────────────────────┐
+│  ollama-opencode-adapter            │
+│  (Port 3000)                        │
+│                                     │
+│  • Receives Ollama API requests     │
+│  • Translates to OpenCode format    │
+│  • Handles function calling logic   │
+│  • Converts responses back          │
+└──────────┬──────────────────────────┘
+           │ OpenCode SDK
+           ▼
+┌─────────────────────┐
+│  OpenCode Server    │  (Port 7272)
+│                     │
+│  • Manages auth     │
+│  • Routes to cloud  │
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│  Cloud Provider     │  (OpenAI, Anthropic, etc.)
+│  (Your choice)      │
+└─────────────────────┘
+```
+
+## Features
+
+### 1. 100% Ollama API Compatible
+
+Implements all essential Ollama endpoints:
+
+- `POST /api/chat` — Chat completions with function calling
+- `GET /api/tags` — List available models
+- `POST /api/show` — Show model information
+- `GET /api/version` — Version information
+- `GET /health` — Health check
+
+Your existing Ollama-compatible applications work without modifications.
+
+### 2. 75+ Cloud Provider Support
+
+Access a wide range of providers through OpenCode.
+
+See [OpenCode Providers](https://opencode.ai/docs/providers) for the complete list.
+
+### 3. Full Function Calling Support
+
+The adapter implements function calling (tools) through intelligent prompt engineering:
+
+- Parses tool definitions from Ollama API
+- Intelligently selects appropriate tools based on user intent
+- Returns properly formatted tool calls in Ollama format
+- Supports multi-step tool execution
+
+### 4. Multi-turn Conversations
+
+Maintains full conversation history:
+
+- Preserves all previous messages (user, assistant, tool results)
+- Context-aware responses based on conversation flow
+- Smart handling of repeated requests
+- Natural language confirmation messages
+
+### 5. Chat-Only Mode
+
+Works perfectly even without tools:
+
+- If no tools are provided, acts as a standard chat interface
+- Automatically detects conversational vs. action requests
+- Falls back gracefully when tool selection is uncertain
+
+### 6. Graceful Error Handling
+
+Robust error handling for production use:
+
+- Timeouts and retries for OpenCode communication
+- Fallback to conversational mode on errors
+- Detailed logging for debugging
+- Health check endpoint for monitoring
+
+## Authentication
+
+### How Authentication Works
+
+**Important:** This adapter does **not** handle authentication. Authentication is managed entirely by OpenCode.
+
+**The Flow:**
+
+1. You authenticate once with OpenCode using `/connect`
+2. OpenCode securely stores your credentials
+3. The adapter tells OpenCode which provider to use (`MODEL_PROVIDER`)
+4. OpenCode uses its stored credentials to communicate with the provider
+5. The adapter never sees your API keys or OAuth tokens
+
+### Setting Up Authentication
+
+**Step 1: Authenticate via OpenCode CLI**
+
+```bash
+opencode
+/connect
+```
+
+**Step 2: Choose Your Provider**
+
+OpenCode supports multiple authentication methods:
+
+| Method         | Providers                                | Use Case                         |
+| -------------- | ---------------------------------------- | -------------------------------- |
+| **OAuth**      | GitHub Copilot, Claude Pro, ChatGPT Plus | Personal use, no API keys needed |
+| **API Key**    | OpenAI, Anthropic, DeepSeek, Groq        | Developer accounts               |
+| **Enterprise** | AWS Bedrock, Google Vertex AI, Azure     | Corporate deployments            |
+
+**Step 3: Configure the Adapter**
+
+Edit `.env` to specify which authenticated provider to use:
+
+```bash
+MODEL_PROVIDER=github-copilot  # Must match what you authenticated with
+MODEL_ID=gpt-4o
+```
+
+**Step 4: Verify**
+
+```bash
+# Start the adapter
+npm start
+
+# Check health endpoint
+curl http://localhost:3000/health
+
+# Should return:
+# {"status":"ok","opencode":"connected","ollama_compatible":true}
+```
+
+### Popular Provider Setup Examples
+
+**GitHub Copilot (OAuth)**
+
+```bash
+# In OpenCode CLI:
+/connect
+# Select: GitHub Copilot
+# Authenticate via GitHub OAuth
+
+# In .env:
+MODEL_PROVIDER=github-copilot
+MODEL_ID=gpt-4o
+```
+
+For other providers, see [OpenCode Authentication Guide](https://opencode.ai/docs/authentication).
+
+## Configuration
+
+### Environment Variables
+
+All configuration is done via environment variables (`.env` file):
+
+```bash
+# Server Configuration
+PORT=3000                    # Port for the adapter to listen on
+HOST=0.0.0.0                # Listen on all network interfaces
+LOG_LEVEL=info              # Logging level: fatal|error|warn|info|debug|trace
+
+# OpenCode Connection
+OPENCODE_URL=http://localhost   # OpenCode server URL
+OPENCODE_PORT=7272             # OpenCode server port (default: 7272)
+
+# Model Selection
+MODEL_PROVIDER=github-copilot  # Provider ID (must match OpenCode authentication)
+MODEL_ID=gpt-4o               # Model ID for the selected provider
+```
+
+### Understanding MODEL_PROVIDER and MODEL_ID
+
+These variables tell the adapter **which provider to use**, not how to authenticate:
+
+- **MODEL_PROVIDER**: The provider identifier in OpenCode (e.g., `github-copilot`, `openai`, `anthropic`)
+- **MODEL_ID**: The specific model to use from that provider (e.g., `gpt-5` )
+
+**Important:** You must have already authenticated with this provider in OpenCode (via `/connect`).
+
+For more details on opencode providers and models, see [OpenCode Models](https://opencode.ai/docs/models/).
+
+### Network Configuration
+
+**Local Setup (default):**
+
+```bash
+OPENCODE_URL=http://localhost
+OPENCODE_PORT=7272
+```
+
+**Remote OpenCode Server:**
+
+```bash
+OPENCODE_URL=http://your-server-ip
+OPENCODE_PORT=7272
+```
+
+**Expose Adapter on Network:**
+
+```bash
+HOST=0.0.0.0  # Allow connections from other devices
+PORT=3000
+```
+
+## Use Cases
+
+### Home Assistant Voice Assistant
+
+Use cloud LLMs for natural voice interactions with your smart home.
+
+1. Add Ollama Integration.
+2. Add a new conversation agent under `Devices & Services -> Ollama`
+
+- Set URL to `http://localhost:3000`
+- Set Model to `gpt-4o`
+
+3. Go to `Settings -> Voice Assistants`
+4. Select your Ollama agent for voice commands
+
+### n8n Workflow Automation
+
+Integrate cloud LLMs into your n8n workflows:
+
+1. Add an "Ollama" node to your workflow
+2. Configure:
+   - Base URL: `http://localhost:3000`
+   - Model: `gpt-4o`
+3. Use function calling to interact with other services
+
+### Custom Applications
+
+Any application supporting Ollama can benefit:
+
+```javascript
+// Example: Using with Ollama client library
+import { Ollama } from "ollama";
+
+const ollama = new Ollama({
+  host: "http://localhost:3000",
+});
+
+const response = await ollama.chat({
+  model: "gpt-4o",
+  messages: [{ role: "user", content: "Hello!" }],
+  tools: [
+    /* your function definitions */
+  ],
+});
 ```
 
 ## API Reference
 
-### POST /api/chat
+This adapter implements the Ollama API specification. For complete API documentation, see [Ollama API Documentation](https://github.com/ollama/ollama/blob/main/docs/api.md).
 
-Standard Ollama chat completion endpoint with tool support.
+### Key Endpoints
 
-**Request:**
-```json
-{
-  "model": "gpt-4o",
-  "messages": [
-    {"role": "system", "content": "You are a helpful assistant"},
-    {"role": "user", "content": "What's the weather?"}
-  ],
-  "tools": [
-    {
-      "type": "function",
-      "function": {
-        "name": "GetWeather",
-        "description": "Get current weather",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "location": {"type": "string"}
-          }
-        }
-      }
-    }
-  ]
-}
-```
+**POST /api/chat**
 
-**Response:**
-```json
-{
-  "model": "gpt-4o",
-  "created_at": "2026-02-03T...",
-  "message": {
-    "role": "assistant",
-    "content": "",
-    "tool_calls": [
-      {
-        "function": {
-          "name": "GetWeather",
-          "arguments": {"location": "Tokyo"}
-        }
-      }
-    ]
-  },
-  "done": true
-}
-```
+- Standard chat completion with tool support
+- Accepts: `{model, messages, tools, stream}`
+- Returns: Ollama-formatted chat response with tool calls
+
+**GET /api/tags**
+
+- List available models
+- Returns: Model information including name, size, format
+
+**GET /health**
+
+- Health check endpoint
+- Returns: `{status, opencode, ollama_compatible}`
+
+### Differences from Native Ollama
+
+While this adapter aims for 100% compatibility, there are some implementation differences:
+
+1. **Streaming**: Not yet supported (responses are always complete)
+2. **Model Management**: Models are not downloaded locally (handled by cloud providers)
+3. **Response Times**: Slightly slower due to additional processing layer
+
+For most use cases, these differences are transparent to the client application.
 
 ## Limitations & Trade-offs
 
-### Compared to Native Ollama
+### Performance
 
-| Feature | Native Ollama | This Adapter |
-|---------|--------------|--------------|
-| Function calling | ✅ Native | ⚠️ Manual (via prompting) |
-| Response time | Fast (~1-2s) | Slower (~3-5s) |
-| Reliability | Very stable | Depends on OpenCode |
-| Accuracy | High | Good (depends on prompt) |
+| Aspect      | Native Ollama  | This Adapter              |
+| ----------- | -------------- | ------------------------- |
+| Latency     | 1-2 seconds    | 3-5 seconds               |
+| Throughput  | Limited by GPU | Limited by API quotas     |
+| Offline Use | ✅ Yes         | ❌ No (requires internet) |
 
-### Known Issues
+**Why Slower?**
 
-1. **OpenCode Timeouts**: OpenCode occasionally times out. We have fallback mechanisms that return conversational responses.
-2. **Prompt Engineering**: Tool selection accuracy depends on prompt quality. The current prompt works well but may need tuning for specific use cases.
-3. **Latency**: Extra LLM calls add ~2-3s compared to native function calling.
+- Network round-trip to cloud provider
+- Additional processing layer for function calling
+- OpenCode session management overhead
+
+### Privacy Considerations
+
+**Native Ollama:**
+
+- All data stays local
+- Complete privacy
+- No data sent externally
+
+**This Adapter:**
+
+- Messages sent to cloud providers
+- Subject to provider's privacy policy
+- Not suitable for sensitive/confidential data
+
+**Recommendation:** Use native Ollama for sensitive applications. Use this adapter for convenience and access to powerful models.
+
+### Reliability
+
+The adapter depends on:
+
+1. **OpenCode Server** — Must be running and accessible
+2. **Internet Connection** — Required for cloud provider communication
+3. **Provider Availability** — Subject to cloud provider uptime
+4. **API Quotas** — Limited by your provider's rate limits
+
+**Mitigation:** The adapter includes timeout handling, retries, and graceful degradation to chat-only mode on errors.
+
+### Cost
+
+**Native Ollama:** Free (but requires hardware investment)
+
+**This Adapter:** Pay-per-use based on provider pricing
+
+- **Free Tiers Available:** Many providers offer free usage tiers
+- **OpenAI:** Pay-as-you-go api token usage or Openai Plus subscription
+- **Google:** Pay -as-you-go based on token usage or Google AI Pro subscription
+- **GitHub Copilot:** GitHub Copilot subscription
+
+## Development
+
+### Running Tests
+
+```bash
+# Run all tests
+npm test
+
+# Run tests in watch mode
+npm run test:watch
+
+# Run with coverage
+npm run test:coverage
+```
+
+**Test Coverage:**
+
+- ✅ 37 unit tests for ConversationHelper
+- ✅ 11 unit tests for OllamaAdapter
+- ✅ 7 integration tests
+- **Total: 55 tests passing**
+
+### Development Mode
+
+```bash
+# Start with auto-reload
+npm run dev
+
+# Type checking
+npm run type-check
+
+# Linting
+npm run lint
+```
+
+### Building for Production
+
+```bash
+# Build TypeScript
+npm run build
+
+# Run built version
+npm start
+```
 
 ## Project Structure
 
 ```
 ollama-opencode-adapter/
 ├── src/
-│   ├── index.ts              # Main entry point
-│   ├── server.ts             # Fastify server, request orchestration
-│   ├── config.ts             # Configuration loader
+│   ├── index.ts                    # Entry point
+│   ├── server.ts                   # Fastify server, request orchestration
+│   ├── config.ts                   # Configuration loader
+│   │
 │   ├── types/
-│   │   ├── ollama.ts         # Ollama API types
-│   │   └── tool-selection.ts # Internal tool selection types
+│   │   ├── ollama.ts               # Ollama API types
+│   │   └── tool-selection.ts       # Internal tool selection types
+│   │
 │   ├── services/
-│   │   └── opencode.ts       # OpenCode SDK wrapper, tool selection logic
+│   │   ├── opencode.ts             # OpenCode SDK wrapper
+│   │   └── conversationHelper.ts   # Conversation history utilities
+│   │
 │   └── adapters/
-│       └── ollamaAdapter.ts  # Format conversions (Ollama ↔ internal)
+│       └── ollamaAdapter.ts        # Format conversions (Ollama ↔ internal)
+│
 ├── tests/
-│   ├── unit/                 # Unit tests
-│   └── integration/          # Integration tests
+│   ├── unit/
+│   │   ├── conversationHelper.test.ts   # 37 tests
+│   │   └── ollamaAdapter.test.ts        # 11 tests
+│   └── integration/
+│       └── context-aware.test.ts        # 7 tests
+│
 ├── docs/
-│   └── FUTURE_ENHANCEMENTS.md
+│   ├── ARCHITECTURE.md             # Technical deep-dive
+│   └── FUTURE_ENHANCEMENTS.md      # Planned features
+│
+├── .env.example                    # Configuration template
 ├── package.json
 ├── tsconfig.json
 └── vitest.config.ts
 ```
 
-## Development
+### For Developers
+
+Want to understand how the adapter works internally? See [ARCHITECTURE.md](./docs/ARCHITECTURE.md) for:
+
+- Why manual function calling is complex
+- Tool selection strategy and prompt engineering
+- Conversation history implementation
+- OpenCode session management
+- Error handling and fallback mechanisms
+
+## Troubleshooting
+
+### Debug Mode
+
+Enable detailed logging for troubleshooting:
 
 ```bash
-# Run tests
-npm test
+# In .env
+LOG_LEVEL=debug
 
-# Run with watch mode
-npm run dev
+# Restart adapter
+npm start
 
-# Type checking
-npm run build
+# Logs will show:
+# - Incoming requests
+# - Tool selection prompts
+# - OpenCode responses
+# - Conversation history
+# - Error details
 ```
+
+### Getting Help
+
+- **Issues:** [GitHub Issues](https://github.com/yourusername/ollama-opencode-adapter/issues)
+- **Discussions:** [GitHub Discussions](https://github.com/yourusername/ollama-opencode-adapter/discussions)
+- **OpenCode Docs:** [https://opencode.ai/docs](https://opencode.ai/docs)
 
 ## Why This Exists
 
-OpenCode SDK is powerful but doesn't expose function calling APIs like OpenAI's Chat Completion API. This adapter bridges that gap, allowing any Ollama-compatible application to leverage OpenCode and its underlying models (like GitHub Copilot) without modification.
+OpenCode provides access to 75+ LLM providers with flexible authentication, but it doesn't expose a function calling API like OpenAI's Chat Completions API or Ollama's native function calling.
 
-This is a **workaround** necessitated by OpenCode's current API design. If OpenCode adds native function calling support in the future, much of this complexity could be removed.
+This adapter bridges that gap by:
+
+1. Implementing the Ollama API specification
+2. Translating function calling requests into OpenCode prompts
+3. Intelligently selecting tools via prompt engineering
+4. Converting responses back to Ollama format
+
+This allows any Ollama-compatible application to leverage OpenCode's provider ecosystem without modification.
+
+**Note:** This is a workaround necessitated by OpenCode's current API design. If OpenCode adds native function calling support in the future, much of this complexity could be removed.
 
 ## Contributing
 

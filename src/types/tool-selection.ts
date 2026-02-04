@@ -5,7 +5,7 @@
  * from available tools provided by Home Assistant.
  */
 
-import type { OllamaTool } from './ollama.js';
+import type { OllamaTool, OllamaMessage } from './ollama.js';
 
 /**
  * Result of LLM tool selection
@@ -25,8 +25,8 @@ export interface ExtractionResult {
   /** System context (YAML device list from HA) */
   systemContext: string;
   
-  /** User's message/command */
-  userMessage: string;
+  /** Full conversation history (replaces userMessage) */
+  conversationHistory: OllamaMessage[];
   
   /** Available tools from HA request */
   availableTools: OllamaTool[];

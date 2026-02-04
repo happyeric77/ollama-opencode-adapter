@@ -2,7 +2,8 @@
 // Handles session-based communication with OpenCode server
 
 import { createOpencodeClient } from "@opencode-ai/sdk";
-import type { OllamaTool } from "../types/ollama.js";
+import type { OllamaTool, OllamaMessage } from "../types/ollama.js";
+import { ConversationHelper } from "./conversationHelper.js";
 import { config } from "../config.js";
 
 export interface OpencodeMessage {
@@ -152,15 +153,24 @@ export class OpencodeService {
    * Extract tool selection from user message using available tools
    * 
    * @param systemContext - System context (device list, available data, etc.)
-   * @param userMessage - User's command
+   * @param conversationHistory - Full conversation history
    * @param availableTools - Tools provided by client
    * @returns JSON string with tool selection
    */
   async extractToolSelection(
     systemContext: string,
-    userMessage: string,
+    conversationHistory: OllamaMessage[],
     availableTools: OllamaTool[]
   ): Promise<string> {
+    
+    // Get recent conversation context for tool selection (limit to last 10 messages for performance)
+    const recentContext = ConversationHelper.buildToolSelectionContext(
+      conversationHistory,
+      10  // Last 10 messages only
+    );
+    
+    // Get the current user message
+    const userMessage = ConversationHelper.getLastUserMessage(conversationHistory);
     
     // Format tools into LLM-friendly description
     const toolsDescription = formatToolsForLLM(availableTools);
@@ -169,7 +179,7 @@ export class OpencodeService {
 
 Available Context:
 ${systemContext}
-
+${recentContext}
 Available Tools:
 ${toolsDescription}
 
@@ -288,39 +298,31 @@ User Request: "${userMessage}"`;
   /**
    * Handle conversational requests
    * 
-   * @param userMessage - User's message
+   * @param conversationHistory - Full conversation history
    * @param systemContext - Client's system prompt (from messages[0])
    * @returns Natural language response
    */
   async handleConversation(
-    userMessage: string,
+    conversationHistory: OllamaMessage[],
     systemContext?: string
   ): Promise<string> {
     
-    // Use client's system context, or provide a minimal default
-    const conversationPrompt = systemContext || 
-      `You are a helpful AI assistant. Respond naturally and concisely.`;
-    
-    // Get current time in UTC (more universal)
-    const now = new Date();
-    const utcTime = now.toISOString();
+    // Build full prompt with conversation history using ConversationHelper
+    const fullPrompt = ConversationHelper.buildConversationPrompt(
+      conversationHistory,
+      systemContext,
+      {
+        includeDateTime: true,
+        // No maxHistoryMessages - include full history for better context
+      }
+    );
 
-    const fullPrompt = `${conversationPrompt}
-
-Current Date and Time (UTC): ${utcTime}
-
-User: "${userMessage}"
-
-Instructions:
-1. Respond naturally and helpfully
-2. Keep responses concise (1-3 sentences) unless detailed information is requested
-3. If you don't have information to answer, politely explain your limitations
-
-Respond now:`;
+    // Get the last user message for the prompt
+    const userMessage = ConversationHelper.getLastUserMessage(conversationHistory);
 
     const response = await this.sendPrompt(
       fullPrompt,
-      userMessage,
+      userMessage || "Continue the conversation",
       {
         sessionTitle: 'conversation',
         maxWaitMs: 30000,
@@ -334,18 +336,21 @@ Respond now:`;
    * Generate completion message for tool execution
    * Uses LLM to create natural, multi-language confirmation message
    * 
-   * @param userMessage - Original user's request
+   * @param conversationHistory - Full conversation history
    * @param toolName - Name of the executed tool
    * @param toolArgs - Arguments passed to the tool
    * @param systemContext - System context for reference
    * @returns Natural language completion message in user's language
    */
   async generateCompletionMessage(
-    userMessage: string,
+    conversationHistory: OllamaMessage[],
     toolName: string,
     toolArgs: Record<string, any>,
     systemContext: string
   ): Promise<string> {
+    // Get the original user request from history
+    const userMessage = ConversationHelper.getOriginalUserRequest(conversationHistory);
+    
     const prompt = `${systemContext}
 
 User said: "${userMessage}"
