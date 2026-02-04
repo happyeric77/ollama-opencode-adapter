@@ -193,90 +193,46 @@ User Request: "${userMessage}"
 
 CRITICAL: Respond with VALID JSON ONLY. No markdown, no explanations, no code blocks.
 
-Response Schema - You must choose ONE of these three response types:
+Response Schema - Choose ONE:
 
-1. TOOL_CALL - When you need to call a tool to fulfill the request:
-{
-  "action": "tool_call",
-  "tool_name": "exact tool name from available tools",
-  "arguments": {
-    // parameters as defined in the tool schema
-  }
-}
+1. TOOL_CALL - Need to call a tool:
+{"action": "tool_call", "tool_name": "tool name", "arguments": {...}}
 
-2. ANSWER - When tool results are available and you can answer the question:
-{
-  "action": "answer",
-  "content": "natural language answer based on tool results"
-}
+2. ANSWER - Have tool result or can answer directly:
+{"action": "answer", "content": "natural language answer"}
 
-3. CHAT - For conversational responses without tools:
-{
-  "action": "chat",
-  "content": "natural conversational response"
-}
+3. CHAT - Conversational response:
+{"action": "chat", "content": "conversational response"}
 
-DECISION RULES (Priority Order):
+DECISION RULES:
 
-1. Check conversation history FIRST:
-   - If last message is a tool result:
-     a) For ACTION requests (turn on/off, set, etc.): Return ANSWER to confirm completion
-        Example: User "開燈" → Tool executed → Return {"action": "answer", "content": "客廳燈已經開啟了"}
-     b) For QUERY requests (is X on?, what's status?): Return ANSWER with the information
-        Example: User "燈是開的嗎" → Tool returns state → Return {"action": "answer", "content": "是的，燈現在是開著的"}
-   - CRITICAL: If tool was just executed for current user request, DO NOT execute it again
-   - Only execute tool again if user makes a NEW request (different intent or after time passed)
+1. IF last message is a tool result:
+   - ACTION result (turn on/off, set) → Return ANSWER to confirm
+   - QUERY result (is X on?, status) → Return ANSWER with info
+   - CRITICAL: Do NOT execute tool again if just executed
 
-2. Check user intent (only if NO recent tool result):
-   - ACTION REQUEST (turn on/off, set, adjust, control) → TOOL_CALL
-   - INFORMATION QUERY (is X on?, what's the status?, get data) → TOOL_CALL (use query tools)
-   - CONVERSATION (greetings, thanks, general chat) → CHAT
+2. IF no recent tool result:
+   - ACTION request → TOOL_CALL
+   - QUERY request → TOOL_CALL (use Get*/Query*/Context tools)
+   - CHAT request → CHAT
 
-3. When in doubt about device state:
-   - DO NOT assume state from old conversation history (>1 minute ago)
-   - Prefer calling query tools (Get*, Query*, Fetch*, *Status, *Context) to check current state
-   - Devices can be controlled via other interfaces (physical switches, automation, other apps)
-
-4. Handling repeated requests:
-   - If user makes the SAME request after receiving an answer: acknowledge instead of re-executing
-   - If user makes the SAME request after TIME PASSED (no recent tool result): execute again
-   - Example: User "開燈" → executed → immediately says "開燈" again → Return "燈已經開啟了"
-   - Example: User "開燈" → executed → 5 mins later says "開燈" → Execute again (state may have changed)
-
-Parameter Extraction Guidelines:
-- Extract parameter values directly from user's request
-- Use information from the system context when needed
-- Match parameter types exactly as defined in tool schema
-- For array types, use array format: ["value1", "value2"]
+3. Repeated requests:
+   - Same request + just executed → ANSWER (acknowledge)
+   - Same request + time passed → TOOL_CALL (re-execute)
 
 Examples:
-
-User: "hello"
-→ {"action": "chat", "content": "Hello! How can I help you?"}
-
-User: "thank you"
-→ {"action": "chat", "content": "You're welcome!"}
 
 User: "開客廳的燈"
 → {"action": "tool_call", "tool_name": "HassTurnOn", "arguments": {"area": "Living Room", "domain": ["light"]}}
 
-[After HassTurnOn executed successfully]
-User: "開客廳的燈" (same request, tool just executed)
+[After tool executed]
 → {"action": "answer", "content": "客廳燈已經開啟了"}
 
-User: "客廳的燈是開著的嗎" (query request)
+User: "客廳的燈是開著的嗎"
 → {"action": "tool_call", "tool_name": "GetLiveContext", "arguments": {}}
 
 [After GetLiveContext returns: "客廳燈: 開啟"]
-User: "客廳的燈是開著的嗎" (query result available)
 → {"action": "answer", "content": "是的，客廳的燈現在是開著的"}
-
-User: "開燈" → [Tool executed] → User immediately asks "開燈" again
-→ {"action": "answer", "content": "燈已經開啟了"}
-
-User: "開燈" → [Tool executed 5 minutes ago, no recent activity]
-→ {"action": "tool_call", "tool_name": "HassTurnOn", "arguments": {...}}
-(Reason: Time passed, state may have changed)
 `.trim();
     
     console.log('[DEBUG] Starting generateResponse...');
