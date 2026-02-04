@@ -211,86 +211,50 @@ export class OpencodeService {
     }
 
     const UNIFIED_RESPONSE_PROMPT =
-      `You are an intelligent assistant that decides how to respond to user requests.
+      `Analyze the user request and decide how to respond.
 
-Available Context:
+=== CONTEXT ===
 ${systemContext}
 ${recentContext}${toolResultText}
-Available Tools:
+
+=== AVAILABLE TOOLS ===
 ${toolsDescription}
 
-User Request: "${userMessage}"
+=== USER REQUEST ===
+"${userMessage}"
 
-CRITICAL ANALYSIS:
-1. Is this an ACTION request (turn on/off, open/close, set, lock/unlock)?
-   - YES → Return TOOL_CALL with appropriate tool
-2. Is this a QUERY request (is X on?, what's the status?, 是...嗎?)?
-   - If tool result available → Return ANSWER with info
-   - If no tool result → Return TOOL_CALL to get info
-3. Is this a CHAT request (greeting, thanks, general conversation)?
-   - YES → Return CHAT
+=== OUTPUT FORMAT ===
+Respond with EXACTLY ONE JSON object in one of these formats:
 
-CRITICAL: Respond with VALID JSON ONLY. No markdown, no explanations, no code blocks.
+A) Call a tool:
+{"action": "tool_call", "tool_name": "ExactToolName", "arguments": {...}}
 
-Response Schema - Choose ONE:
+B) Provide an answer:
+{"action": "answer", "content": "your response"}
 
-1. TOOL_CALL - Need to call a tool:
-{"action": "tool_call", "tool_name": "tool name", "arguments": {...}}
+C) Chat conversationally:
+{"action": "chat", "content": "your response"}
 
-2. ANSWER - Have tool result or can answer directly:
-{"action": "answer", "content": "natural language answer"}
+=== DECISION LOGIC ===
 
-3. CHAT - Conversational response:
-{"action": "chat", "content": "conversational response"}
+1. If the request requires executing a tool:
+   → Use Format A with the appropriate tool and arguments
 
-DECISION RULES:
+2. If a tool result is available and answers the request:
+   → Use Format B to provide answer based on the tool result
 
-1. IF last message is a tool result:
-   - ACTION result (turn on/off, set) → Return ANSWER to confirm
-   - QUERY result (is X on?, status) → Return ANSWER with info
-   - CRITICAL: Do NOT execute tool again if just executed
+3. If no tools are needed or available:
+   → Use Format C for conversational response
 
-2. IF no recent tool result:
-   - ACTION request (turn on/off, open/close, set, adjust, 開/關/設定/打開) → TOOL_CALL
-   - Follow-up ACTION with pronouns (那打開他, 關掉它, turn it on) → TOOL_CALL (refer to recent context)
-   - QUERY request (is X on?, status, 是...嗎?, 狀態) → TOOL_CALL (use Get*/Query*/Context tools)
-   - CHAT request (greetings, thanks, general questions) → CHAT
+${hasToolResult ? "\nNOTE: A tool result is available above. Use it to answer if it's relevant to the user's request.\n" : ""}
+=== CONSTRAINTS ===
+- Output EXACTLY ONE JSON object
+- Start with { and end with }
+- No text before or after the JSON
+- Match the user's language in responses
+- Extract tool arguments accurately from the request
 
-3. Repeated requests:
-   - Same request + just executed → ANSWER (acknowledge)
-   - Same request + time passed → TOOL_CALL (re-execute)
-
-4. Context references:
-   - User says "打開他/它" or "turn it on" → Check recent conversation for device reference
-   - If recent conversation mentioned a device, execute action on that device
-
-Examples:
-
-User: "開客廳的燈"
-→ {"action": "tool_call", "tool_name": "HassTurnOn", "arguments": {"area": "Living Room", "domain": ["light"]}}
-
-[After tool executed]
-→ {"action": "answer", "content": "客廳燈已經開啟了"}
-
-User: "請關閉客廳燈"
-→ {"action": "tool_call", "tool_name": "HassTurnOff", "arguments": {"area": "Living Room", "domain": ["light"]}}
-
-[After tool executed]
-→ {"action": "answer", "content": "客廳燈已經關閉了"}
-
-User: "客廳的燈是開著的嗎"
-→ {"action": "tool_call", "tool_name": "GetLiveContext", "arguments": {}}
-
-[After GetLiveContext returns: "客廳燈: 關閉"]
-→ {"action": "answer", "content": "不，客廳的燈現在是關著的"}
-
-User: "那打開它"
-→ {"action": "tool_call", "tool_name": "HassTurnOn", "arguments": {"area": "Living Room", "domain": ["light"]}}
-→ {"action": "tool_call", "tool_name": "GetLiveContext", "arguments": {}}
-
-[After GetLiveContext returns: "客廳燈: 開啟"]
-→ {"action": "answer", "content": "是的，客廳的燈現在是開著的"}
-`.trim();
+Output your JSON:`.trim();
 
     console.log("[DEBUG] Starting generateResponse...");
     console.log("[DEBUG] conversationLength:", conversationHistory.length);
@@ -331,14 +295,32 @@ ${hasToolResult ? "\nNote: A tool result is available in the conversation histor
 
       console.log("[DEBUG] Raw LLM response:", response.content);
 
-      // Clean markdown code blocks and handle duplicated JSON
+      // Clean markdown code blocks
       let cleaned = response.content
         .trim()
         .replace(/```json\n?/g, "")
         .replace(/```\n?/g, "")
         .trim();
 
-      console.log("[DEBUG] Cleaned response:", cleaned);
+      // Detect and extract first valid JSON object (Ref: https://community.openai.com/t/2-json-objects-returned-when-using-function-calling-and-json-mode/574348)
+      const jsonMatch = cleaned.match(/\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/);
+      if (!jsonMatch) {
+        throw new Error("No valid JSON object found in LLM response");
+      }
+
+      // Warn if multiple JSON objects detected
+      const allMatches = cleaned.match(/\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g);
+      if (allMatches && allMatches.length > 1) {
+        console.warn(
+          `[WARN] LLM returned ${allMatches.length} JSON objects, using first one`,
+        );
+        console.warn("[WARN] Full response:", cleaned);
+      }
+
+      // Use only the first JSON object
+      cleaned = jsonMatch[0];
+
+      console.log("[DEBUG] Extracted JSON:", cleaned);
 
       // Parse and validate response
       const parsed = JSON.parse(cleaned);
@@ -379,26 +361,7 @@ ${hasToolResult ? "\nNote: A tool result is available in the conversation histor
         }
       }
 
-      // Fallback Strategy 2: For query requests, try to call GetLiveContext
-      const isQueryRequest = this.isQueryRequest(userMessage);
-      const hasGetLiveContext = availableTools.some(
-        (t) =>
-          t.function.name === "GetLiveContext" ||
-          t.function.name.toLowerCase().includes("context"),
-      );
-
-      if (isQueryRequest && hasGetLiveContext && !hasToolResult) {
-        console.log(
-          "[FALLBACK] Query request detected, calling GetLiveContext",
-        );
-        return {
-          action: "tool_call",
-          tool_name: "GetLiveContext",
-          arguments: {},
-        };
-      }
-
-      // Fallback Strategy 3: Return error-specific message
+      // Fallback Strategy 2: Return friendly error message
       console.log("[FALLBACK] Using final fallback chat response");
       return {
         action: "chat",
@@ -460,39 +423,24 @@ Generate ONLY the answer, nothing else:`.trim();
   }
 
   /**
-   * Detect if user message is a query request (asking for information)
-   */
-  private isQueryRequest(userMessage: string): boolean {
-    const queryPatterns = [
-      /是.*嗎/, // Chinese: 是...嗎
-      /現在.*是/, // Chinese: 現在...是
-      /什麼.*狀態/, // Chinese: 什麼狀態
-      /^請問/, // Chinese: 請問
-      /^is\s/i, // English: is...
-      /^are\s/i, // English: are...
-      /\bstatus\b/i, // English: status
-      /\bstate\b/i, // English: state
-      /^what/i, // English: what...
-    ];
-
-    return queryPatterns.some((pattern) => pattern.test(userMessage));
-  }
-
-  /**
    * Get a simple fallback chat response when all else fails
+   * Language detection priority: Japanese (kana) > Chinese (hanzi) > English
    */
   private getFallbackChatResponse(userMessage: string): string {
-    // Detect language and respond appropriately
+    // Detect Japanese first (Japanese always contains kana, Chinese doesn't)
+    const hasJapaneseKana = /[\u3040-\u309f\u30a0-\u30ff]/.test(userMessage);
     const hasChineseChars = /[\u4e00-\u9fa5]/.test(userMessage);
-    const hasJapaneseChars = /[\u3040-\u309f\u30a0-\u30ff]/.test(userMessage);
 
-    if (hasChineseChars) {
-      return "我現在無法處理這個請求，請稍後再試。";
-    } else if (hasJapaneseChars) {
+    if (hasJapaneseKana) {
+      // Japanese (even if it contains kanji/Chinese characters)
       return "申し訳ございませんが、現在このリクエストを処理できません。";
-    } else {
-      return "I'm unable to process this request right now. Please try again later.";
     }
+    if (hasChineseChars) {
+      // Chinese (hanzi only, no kana)
+      return "我現在無法處理這個請求，請稍後再試。";
+    }
+    // English or other languages
+    return "I'm unable to process this request right now. Please try again later.";
   }
 
   isConnected(): boolean {
