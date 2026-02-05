@@ -51,9 +51,9 @@ Currently, unknown tool error messages are in Japanese only. Could add:
 **Priority**: Low  
 **Status**: Not started
 
-If Home Assistant has weather integration:
+If the client application has weather integration:
 
-- Fetch weather data from HA
+- Fetch weather data from client application
 - Answer weather queries in conversation
 - Provide forecasts
 
@@ -66,7 +66,7 @@ If Home Assistant has weather integration:
 
 Currently, device status queries are handled conversationally. Could add:
 
-- Direct HA API calls for real-time status
+- Direct client API calls for real-time status
 - More detailed status information
 - Historical data queries
 

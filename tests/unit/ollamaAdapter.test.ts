@@ -16,7 +16,7 @@ import type {
   ChatResponse,
 } from '../../src/types/tool-selection.js';
 
-// Sample tools for testing (mimicking HA's tools)
+// Sample tools for testing (smart home use case example)
 const sampleTools: OllamaTool[] = [
   {
     type: 'function',

@@ -85,6 +85,9 @@ describe('Dynamic Tool Selection Integration', () => {
   });
 
   it('should handle HA tools array with 19 tools', () => {
+    // Note: These tool names (HassTurnOn, HassTurnOff, etc.) are actual tools from
+    // Home Assistant integration, used here as a real-world example of the adapter's
+    // flexibility. The adapter works with ANY tool names from ANY Ollama client.
     const mockHATools = [
       'HassTurnOn',
       'HassTurnOff',

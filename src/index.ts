@@ -34,7 +34,7 @@ async function start() {
     console.log(`  POST http://${config.host}:${config.port}/api/show`);
     console.log(`  GET  http://${config.host}:${config.port}/api/version`);
     console.log('');
-    console.log('Ready to accept requests from Home Assistant!');
+    console.log('Ready to accept requests from Ollama-compatible clients!');
 
     // Graceful shutdown
     const shutdown = async (signal: string) => {

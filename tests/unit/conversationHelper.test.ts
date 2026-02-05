@@ -188,10 +188,10 @@ describe('ConversationHelper', () => {
     it('should build prompt with custom system context', () => {
       const result = ConversationHelper.buildConversationPrompt(
         singleUserMessage,
-        'You are a Home Assistant helper',
+        'You are a helpful AI assistant',
         { includeDateTime: false }
       );
-      expect(result).toContain('You are a Home Assistant helper');
+      expect(result).toContain('You are a helpful AI assistant');
       expect(result).toContain('User: Hello');
     });
 

@@ -59,7 +59,7 @@ export async function createServer() {
             stream: body.stream,
             toolsCount: body.tools?.length || 0,
           },
-          "Received Ollama chat request from HA",
+          "Received Ollama chat request",
         );
 
         // Validate request
@@ -217,7 +217,7 @@ export async function createServer() {
   // Ollama /api/show endpoint - show model information
   fastify.post<{ Body: { name: string } }>("/api/show", async () => {
     const response: OllamaShowResponse = {
-      modelfile: "# ha-ai proxy model\nFROM ha-ai-proxy",
+      modelfile: "# ollama-opencode-adapter model\nFROM ollama-opencode-adapter",
       parameters: "temperature 0.7",
       template: "{{ .System }}\n{{ .Prompt }}",
       details: {

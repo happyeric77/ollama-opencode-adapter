@@ -66,7 +66,7 @@ export interface ChatResponse {
  * response generation logic.
  */
 export interface ExtractionResult {
-  /** System context (e.g., YAML device list from HA) */
+  /** System context (e.g., static context, device list, available data, etc.) */
   systemContext: string;
   
   /** Full conversation history */
