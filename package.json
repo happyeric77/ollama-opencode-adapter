@@ -20,7 +20,7 @@
     "llm",
     "api-proxy"
   ],
-  "author": "",
+  "author": "Eric Lee",
   "license": "ISC",
   "dependencies": {
     "@fastify/cors": "^11.2.0",

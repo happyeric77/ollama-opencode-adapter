@@ -639,8 +639,8 @@ npm start
 
 ### Getting Help
 
-- **Issues:** [GitHub Issues](https://github.com/yourusername/ollama-opencode-adapter/issues)
-- **Discussions:** [GitHub Discussions](https://github.com/yourusername/ollama-opencode-adapter/discussions)
+- **Issues:** [GitHub Issues](https://github.com/happyeric77/ollama-opencode-adapter/issues)
+- **Discussions:** [GitHub Discussions](https://github.com/happyeric77/ollama-opencode-adapter/discussions)
 - **OpenCode Docs:** [https://opencode.ai/docs](https://opencode.ai/docs)
 
 ## Why This Exists
@@ -664,4 +664,4 @@ Contributions are welcome! Please feel free to submit issues or pull requests.
 
 ## License
 
-ISC
+This project is licensed under the ISC License - see the [LICENSE](LICENSE) file for details.

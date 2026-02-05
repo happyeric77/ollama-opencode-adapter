@@ -22,12 +22,14 @@ You might expect a simple adapter between two APIs to be ~50-100 lines of code. 
 ### 1. Unified Response Generation (~300 lines)
 
 **The Problem:**
+
 - OpenCode doesn't support function calling natively
 - It only has a simple prompt API: send text, get text back
 - Ollama API expects native function calling support
 - Need to decide between tool calls, answers, and chat responses
 
 **Our Solution:**
+
 - LLM-based unified response generation
 - Single decision point: tool_call, answer, or chat
 - No hardcoded tool type assumptions
@@ -35,11 +37,13 @@ You might expect a simple adapter between two APIs to be ~50-100 lines of code. 
 - Intelligent handling of tool results
 
 **Code Locations:**
+
 - `src/services/opencode.ts` — `generateResponse()` method (~170 lines)
 - `src/adapters/ollamaAdapter.ts` — Format conversions (~150 lines)
 - `src/server.ts` — Unified flow orchestration (~80 lines)
 
 **Complexity Factors:**
+
 - LLMs don't always return valid JSON
 - Tool names might be hallucinated
 - Parameter extraction from natural language
@@ -49,11 +53,13 @@ You might expect a simple adapter between two APIs to be ~50-100 lines of code. 
 ### 2. Stability & Fallback Mechanisms (~300 lines)
 
 **The Problem:**
+
 - OpenCode can timeout or become unresponsive
 - Cloud providers can be slow or unavailable
 - Session management can fail
 
 **Our Solution:**
+
 - Implement comprehensive timeout handling
 - Retry logic for transient failures
 - Fallback to chat-only mode on errors
@@ -61,15 +67,17 @@ You might expect a simple adapter between two APIs to be ~50-100 lines of code. 
 - Health check endpoint for monitoring
 
 **Code Locations:**
+
 - `src/services/opencode.ts` — Session management with timeouts (~150 lines)
 - `src/server.ts` — Error handling and fallbacks (~100 lines)
 - Timeout configurations scattered throughout (~50 lines)
 
 **Key Patterns:**
+
 ```typescript
 // Promise.race for timeout handling
-const timeoutPromise = new Promise((_, reject) => 
-  setTimeout(() => reject(new Error('Timeout')), 20000)
+const timeoutPromise = new Promise((_, reject) =>
+  setTimeout(() => reject(new Error("Timeout")), 20000),
 );
 await Promise.race([operation(), timeoutPromise]);
 
@@ -77,8 +85,8 @@ await Promise.race([operation(), timeoutPromise]);
 try {
   return await extractToolSelection();
 } catch (err) {
-  console.error('Tool selection failed, falling back to chat');
-  return { tool_name: 'chat', arguments: {} };
+  console.error("Tool selection failed, falling back to chat");
+  return { tool_name: "chat", arguments: {} };
 }
 
 // Session cleanup in finally block
@@ -93,6 +101,7 @@ try {
 ### 3. Multi-turn Conversation Handling (~200 lines)
 
 **The Problem:**
+
 - Need to preserve conversation history across turns
 - Detect when to use tool calls vs. generate answers vs. chat
 - Handle tool result processing (convert to natural language)
@@ -100,6 +109,7 @@ try {
 - Device state can change outside our control
 
 **Our Solution:**
+
 - Full conversation history preservation (no truncation)
 - Smart context selection (last 10 messages for tool selection)
 - Dedicated `ConversationHelper` service with 6 utility methods
@@ -107,11 +117,13 @@ try {
 - No repeated request detection — always check current state
 
 **Code Locations:**
+
 - `src/services/conversationHelper.ts` — 6 static utility methods (~200 lines)
 - `src/services/opencode.ts` — Unified response generation (~100 lines)
 - `src/server.ts` — Single unified flow (~80 lines)
 
 **Key Features:**
+
 ```typescript
 // Build tool selection context (last N messages)
 ConversationHelper.buildToolSelectionContext(history, 10);
@@ -129,6 +141,7 @@ ConversationHelper.countMessagesByRole(history);
 ### 4. Format Conversions (~200 lines)
 
 **The Problem:**
+
 - Three different message formats:
   - Ollama format (from client)
   - Internal format (our processing)
@@ -137,23 +150,27 @@ ConversationHelper.countMessagesByRole(history);
 - Error format conversions
 
 **Our Solution:**
+
 - Dedicated adapter layer for format conversions
 - Type-safe transformations with TypeScript
 - Bidirectional conversions (Ollama ↔ internal ↔ OpenCode)
 - Comprehensive error mapping
 
 **Code Locations:**
+
 - `src/adapters/ollamaAdapter.ts` — All format conversions (~200 lines)
 
 ### 5. Edge Cases & Design Philosophy (~100 lines)
 
 **Design Philosophy:**
+
 - **No state assumptions** — Never assume device state from conversation history
 - **Always verify** — Devices can be controlled via other interfaces (physical switches, automation, other apps)
 - **Idempotent operations** — Repeated requests should execute again, not assume previous state
 - **LLM-driven decisions** — Let the LLM decide everything based on current context
 
 **Edge cases we handle:**
+
 - Invalid tool selection (validate against available tools)
 - Missing or malformed messages
 - Tool results that need natural language answers
@@ -161,6 +178,7 @@ ConversationHelper.countMessagesByRole(history);
 - No tools provided (chat-only mode)
 
 **Code Locations:**
+
 - `src/server.ts` — Unified flow with edge case handling (~80 lines)
 - `src/services/opencode.ts` — Fallback mechanisms (~70 lines)
 
@@ -238,6 +256,7 @@ ConversationHelper.countMessagesByRole(history);
 ### server.ts
 
 **Responsibilities:**
+
 - HTTP server setup (Fastify)
 - Endpoint implementations (`/api/chat`, `/api/tags`, etc.)
 - Request validation
@@ -255,6 +274,7 @@ ConversationHelper.countMessagesByRole(history);
    - Return response
 
 **Simplification (Phase 4):**
+
 - **Before**: 476 lines with multiple special case handlers
   - Query tool result handling (~60 lines)
   - Repeated request handling (~65 lines)
@@ -267,6 +287,7 @@ ConversationHelper.countMessagesByRole(history);
 ### services/opencode.ts
 
 **Responsibilities:**
+
 - OpenCode SDK wrapper
 - Session lifecycle management
 - Unified response generation
@@ -308,19 +329,10 @@ ConversationHelper.countMessagesByRole(history);
    - Detects user language and responds appropriately
    - Returns: Simple error message in user's language
 
-**Removed Methods (Phase 3):**
-- ❌ `extractToolSelection()` — Replaced by `generateResponse()`
-- ❌ `handleConversation()` — Now part of `generateResponse()`
-- ❌ `generateCompletionMessage()` — No longer needed (no repeated request detection)
-
-**Simplification:**
-- **Before**: 437 lines with three separate methods
-- **After**: 442 lines with unified approach
-- **Result**: More functionality with similar code size, better maintainability
-
 ### services/conversationHelper.ts
 
 **Responsibilities:**
+
 - Conversation history utilities
 - Message filtering and extraction
 - Context building for different purposes
@@ -366,6 +378,7 @@ ConversationHelper.countMessagesByRole(history);
 ### adapters/ollamaAdapter.ts
 
 **Responsibilities:**
+
 - Parse Ollama API requests
 - Extract messages, tools, context
 - Detect special request patterns
@@ -396,6 +409,7 @@ ConversationHelper.countMessagesByRole(history);
 ### The Challenge
 
 OpenCode provides a simple API:
+
 ```typescript
 // What OpenCode gives us:
 session.prompt({
@@ -408,6 +422,7 @@ session.prompt({
 ```
 
 Ollama API expects:
+
 ```typescript
 // What clients send us:
 {
@@ -444,23 +459,26 @@ Ollama API expects:
 
 ```typescript
 function formatToolsForLLM(tools: OllamaTool[]): string {
-  return tools.map((tool, index) => {
-    const func = tool.function;
-    const params = func.parameters;
-    
-    return `
+  return tools
+    .map((tool, index) => {
+      const func = tool.function;
+      const params = func.parameters;
+
+      return `
 ${index + 1}. ${func.name}
    Description: ${func.description}
    Parameters:
 ${formatParameters(params.properties, params.required)}
     `.trim();
-  }).join('\n\n');
+    })
+    .join("\n\n");
 }
 ```
 
 **Step 2: Craft unified response prompt**
 
 The prompt includes:
+
 - System context (from client)
 - Recent conversation history
 - Available tools (formatted above)
@@ -475,53 +493,58 @@ The prompt includes:
 const response = await this.sendPrompt(
   "You are an intelligent assistant. Respond with valid JSON only.",
   fullPrompt,
-  { sessionTitle: 'unified-response', maxWaitMs: 30000 }
+  { sessionTitle: "unified-response", maxWaitMs: 30000 },
 );
 ```
 
 **Step 4: Parse and validate response**
 
-```typescript
+````typescript
 // Clean markdown code blocks
 const cleaned = response.content
   .trim()
-  .replace(/```json\n?/g, '')
-  .replace(/```\n?/g, '')
+  .replace(/```json\n?/g, "")
+  .replace(/```\n?/g, "")
   .trim();
 
 // Parse JSON
 const unifiedResponse = JSON.parse(cleaned) as UnifiedResponse;
 
 // Validate response action type
-if (!['tool_call', 'answer', 'chat'].includes(unifiedResponse.action)) {
+if (!["tool_call", "answer", "chat"].includes(unifiedResponse.action)) {
   throw new Error(`Invalid response action: ${unifiedResponse.action}`);
 }
-```
+````
 
 **Step 5: Convert to Ollama format**
 
 ```typescript
-if (unifiedResponse.action === 'tool_call') {
+if (unifiedResponse.action === "tool_call") {
   // Tool call
   return {
     message: {
       role: "assistant",
       content: "",
-      tool_calls: [{
-        function: {
-          name: unifiedResponse.tool_name,
-          arguments: unifiedResponse.arguments
-        }
-      }]
-    }
+      tool_calls: [
+        {
+          function: {
+            name: unifiedResponse.tool_name,
+            arguments: unifiedResponse.arguments,
+          },
+        },
+      ],
+    },
   };
-} else if (unifiedResponse.action === 'answer' || unifiedResponse.action === 'chat') {
+} else if (
+  unifiedResponse.action === "answer" ||
+  unifiedResponse.action === "chat"
+) {
   // Answer or conversational response
   return {
     message: {
       role: "assistant",
-      content: unifiedResponse.content
-    }
+      content: unifiedResponse.content,
+    },
   };
 }
 ```
@@ -529,6 +552,7 @@ if (unifiedResponse.action === 'tool_call') {
 ### Handling Edge Cases
 
 **Invalid JSON:**
+
 ```typescript
 try {
   unifiedResponse = JSON.parse(cleaned);
@@ -544,12 +568,13 @@ try {
 ```
 
 **Hallucinated tool names:**
+
 ```typescript
-if (unifiedResponse.action === 'tool_call') {
+if (unifiedResponse.action === "tool_call") {
   const isValidTool = availableTools.some(
-    t => t.function.name === unifiedResponse.tool_name
+    (t) => t.function.name === unifiedResponse.tool_name,
   );
-  
+
   if (!isValidTool && unifiedResponse.tool_name !== "unknown") {
     // Return "unknown" to let client handle
     unifiedResponse.tool_name = "unknown";
@@ -558,6 +583,7 @@ if (unifiedResponse.action === 'tool_call') {
 ```
 
 **Tool result available:**
+
 ```typescript
 // LLM checks if tool result answers the question
 // If yes: return {action: 'answer', content: "..."}
@@ -620,6 +646,7 @@ const unifiedResponse = await opencodeService.generateResponse(
 ### Why Separate Contexts?
 
 **Unified Response Generation (last 10 messages):**
+
 - **Speed** — Less tokens = faster response
 - **Focus** — Recent context is most relevant for decision
 - **Cost** — Fewer tokens = lower API cost
@@ -630,32 +657,33 @@ const unifiedResponse = await opencodeService.generateResponse(
 ### ConversationHelper Methods
 
 **1. getLastUserMessage()**
+
 ```typescript
 // Find the most recent user message
-const userMessages = history.filter(m => m.role === 'user');
-return userMessages[userMessages.length - 1]?.content || '';
+const userMessages = history.filter((m) => m.role === "user");
+return userMessages[userMessages.length - 1]?.content || "";
 ```
 
 **2. buildToolSelectionContext(history, maxMessages)**
+
 ```typescript
 // Build context from recent messages
 const recentMessages = history.slice(-maxMessages);
-return recentMessages
-  .map(m => `${m.role}: ${m.content}`)
-  .join('\n');
+return recentMessages.map((m) => `${m.role}: ${m.content}`).join("\n");
 ```
 
 **3. buildConversationPrompt(history, systemContext, options)**
+
 ```typescript
 // Build full prompt with all history
 const conversationText = history
-  .map(m => {
-    if (m.role === 'tool') {
+  .map((m) => {
+    if (m.role === "tool") {
       return `Tool Result:\n${m.content}`;
     }
     return `${capitalize(m.role)}:\n${m.content}`;
   })
-  .join('\n\n');
+  .join("\n\n");
 
 return `${systemContext}
 
@@ -669,8 +697,9 @@ Current date/time: ${new Date().toISOString()}`;
 ### Design Philosophy
 
 **Key Insight**: Device state can change outside our control through:
+
 - Physical switches
-- Automation rules  
+- Automation rules
 - Other apps/interfaces
 - Time passing
 
@@ -681,6 +710,7 @@ Current date/time: ${new Date().toISOString()}`;
 ### Three Response Types
 
 **1. TOOL_CALL** - Execute an action or query
+
 ```typescript
 {
   action: "tool_call",
@@ -690,6 +720,7 @@ Current date/time: ${new Date().toISOString()}`;
 ```
 
 **2. ANSWER** - Generate answer from tool results
+
 ```typescript
 {
   action: "answer",
@@ -698,6 +729,7 @@ Current date/time: ${new Date().toISOString()}`;
 ```
 
 **3. CHAT** - Conversational response
+
 ```typescript
 {
   action: "chat",
@@ -710,22 +742,26 @@ Current date/time: ${new Date().toISOString()}`;
 The unified prompt enforces this decision flow:
 
 **1. Check conversation history:**
+
 - If last message is a tool result, analyze if it answers the user's question
 - **IMPORTANT**: Tool results show state at execution time, but state may have changed
 - If tool result answers the question, return ANSWER with natural language explanation
 - If tool result doesn't fully answer, consider calling another tool
 
 **2. Check user intent:**
+
 - **ACTION REQUEST** (turn on/off, set, adjust, control) → TOOL_CALL
 - **INFORMATION QUERY** (is X on?, what's the status?, get data) → TOOL_CALL (use query tools)
 - **CONVERSATION** (greetings, thanks, general chat) → CHAT
 
 **3. When in doubt about device state:**
+
 - DO NOT assume state from conversation history
-- Prefer calling query tools (Get*, Query*, Fetch*, *Status, *Context) to check current state
+- Prefer calling query tools (Get*, Query*, Fetch*, *Status, \*Context) to check current state
 - Devices can be controlled via other interfaces
 
 **4. Handling repeated requests:**
+
 - If user requests the same action again, **EXECUTE IT AGAIN** (don't assume state)
 - Example: User says "開燈" → executed → 5 mins later says "開燈" → **EXECUTE AGAIN**
 - Rationale: Device may have been turned off by automation or physical switch
@@ -733,6 +769,7 @@ The unified prompt enforces this decision flow:
 ### Prompt Engineering Details
 
 **JSON Schema Enforcement:**
+
 ```
 CRITICAL: Respond with VALID JSON ONLY. No markdown, no explanations, no code blocks.
 
@@ -759,6 +796,7 @@ Response Schema - You must choose ONE of these three response types:
 ```
 
 **Parameter Extraction Guidelines:**
+
 ```
 - Extract parameter values directly from user's request
 - Use information from the system context when needed
@@ -767,6 +805,7 @@ Response Schema - You must choose ONE of these three response types:
 ```
 
 **Examples in Prompt:**
+
 ```
 User: "hello"
 → {"action": "chat", "content": "Hello! How can I help you?"}
@@ -788,25 +827,28 @@ User: "開燈" (light already turned on 5 minutes ago in history)
 ### Handling Ambiguity
 
 **Unclear action requests:**
+
 ```typescript
 toolSelection = {
   tool_name: "unknown",
-  arguments: {}
+  arguments: {},
 };
 // Client sees this and can prompt user for clarification
 ```
 
 **Information query without query tool:**
+
 ```typescript
 toolSelection = {
   tool_name: "chat",
-  arguments: {}
+  arguments: {},
 };
 // LLM generates conversational response like:
 // "I don't have access to real-time information right now."
 ```
 
 **When in doubt:**
+
 ```
 // Prompt says:
 "When in doubt between action and conversation: prefer 'chat'"
@@ -819,14 +861,19 @@ toolSelection = {
 **Multiple timeout layers:**
 
 1. **Session prompt timeout (20s):**
+
 ```typescript
 const promptTimeoutPromise = new Promise((_, reject) =>
-  setTimeout(() => reject(new Error('session.prompt() timeout after 20s')), 20000)
+  setTimeout(
+    () => reject(new Error("session.prompt() timeout after 20s")),
+    20000,
+  ),
 );
 await Promise.race([promptPromise, promptTimeoutPromise]);
 ```
 
 2. **Response polling timeout (30s):**
+
 ```typescript
 const maxWaitMs = 30000;
 while (Date.now() - startTime < maxWaitMs) {
@@ -837,9 +884,10 @@ while (Date.now() - startTime < maxWaitMs) {
 ```
 
 3. **Session deletion timeout (5s):**
+
 ```typescript
 const deletePromise = this.client.session.delete({...});
-const timeoutPromise = new Promise((_, reject) => 
+const timeoutPromise = new Promise((_, reject) =>
   setTimeout(() => reject(new Error('Session delete timeout')), 5000)
 );
 await Promise.race([deletePromise, timeoutPromise]);
@@ -860,6 +908,7 @@ await Promise.race([deletePromise, timeoutPromise]);
 ```
 
 **Implementation:**
+
 ```typescript
 try {
   // Primary: LLM-based tool selection
@@ -867,13 +916,13 @@ try {
   return toolSelection;
 } catch (err) {
   console.error('Tool selection failed, falling back');
-  
+
   try {
     // Secondary: Rule-based fallback
     return fallbackToolSelection(userMessage);
   } catch (err2) {
     console.error('Fallback failed, returning error');
-    
+
     // Tertiary: Error response
     return convertErrorToOllama(err2, model);
   }
@@ -883,11 +932,12 @@ try {
 ### Session Cleanup
 
 **Always cleanup, even on errors:**
+
 ```typescript
 try {
   const session = await this.client.session.create({...});
   const sessionId = session.data?.id;
-  
+
   try {
     // Use session
     const response = await this.client.session.prompt({...});
@@ -913,20 +963,18 @@ try {
 ### Error Conversion
 
 **Convert all errors to Ollama format:**
+
 ```typescript
-function convertErrorToOllama(
-  error: Error,
-  model: string
-): OllamaChatResponse {
+function convertErrorToOllama(error: Error, model: string): OllamaChatResponse {
   return {
     model,
     created_at: new Date().toISOString(),
     message: {
-      role: 'assistant',
+      role: "assistant",
       content: `Error: ${error.message}`,
     },
     done: true,
-    done_reason: 'error',
+    done_reason: "error",
     error: error.message,
   };
 }
@@ -960,34 +1008,40 @@ function convertErrorToOllama(
    - Best-effort, doesn't block response
 
 **Chat-only mode:**
+
 - Slightly faster (no tool selection needed)
 - Still ~2-3 seconds due to LLM call
 
 **Comparison to native Ollama:**
+
 - Native Ollama: ~1-2 seconds (local inference)
 - This adapter: ~3-5 seconds (network + cloud inference + processing)
 
 ### Optimization Opportunities
 
 **1. Session reuse**
+
 - Currently: Create/delete session per request
 - Potential: Reuse sessions for same client
 - Savings: ~200-600ms per request
 - Trade-off: Session management complexity
 
 **2. Tool selection caching**
+
 - Currently: Call LLM for every tool selection
 - Potential: Cache tool selections for identical requests
 - Savings: ~1-2 seconds on cache hit
 - Trade-off: Context changes might be missed
 
 **3. Streaming responses**
+
 - Currently: Wait for complete response
 - Potential: Stream tokens as they arrive
 - Savings: Perceived latency improvement
 - Trade-off: Significant implementation complexity
 
 **4. Parallel processing**
+
 - Currently: Sequential processing
 - Potential: Parallel tool selection + conversation context building
 - Savings: Minimal (most time is in LLM call)
@@ -996,15 +1050,18 @@ function convertErrorToOllama(
 ### Memory Usage
 
 **Conversation history:**
+
 - No truncation by design
 - Can grow large over long sessions
 - Cloud models handle large contexts well
 
 **Potential issue:**
+
 - Very long conversations (100+ messages) might hit provider limits
 - Consider truncation for extremely long histories
 
 **Current approach:**
+
 - Trust cloud providers' context limits (128k+ tokens)
 - Monitor for issues in production
 - Add truncation if needed
