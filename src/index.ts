@@ -1,4 +1,4 @@
-// Main entry point for ha-ai proxy server
+// Main entry point for ollama-opencode-adapter
 
 import { createServer } from './server.js';
 import { config } from './config.js';
@@ -6,7 +6,7 @@ import { getOpencodeService } from './services/opencode.js';
 
 async function start() {
   try {
-    console.log('Starting ha-ai proxy server...');
+    console.log('Starting ollama-opencode-adapter...');
     console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
     console.log(`Log level: ${config.logLevel}`);
 

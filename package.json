@@ -22,6 +22,14 @@
   ],
   "author": "Eric Lee",
   "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/happyeric77/ollama-opencode-adapter.git"
+  },
+  "homepage": "https://github.com/happyeric77/ollama-opencode-adapter#readme",
+  "bugs": {
+    "url": "https://github.com/happyeric77/ollama-opencode-adapter/issues"
+  },
   "dependencies": {
     "@fastify/cors": "^11.2.0",
     "@opencode-ai/sdk": "^1.1.48",

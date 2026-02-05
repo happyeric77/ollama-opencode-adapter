@@ -258,33 +258,11 @@ ${hasToolResult ? "\nNOTE: A tool result is available above. Use it to answer if
 
 Output your JSON:`.trim();
 
-    console.log("[DEBUG] Starting generateResponse...");
-    console.log("[DEBUG] conversationLength:", conversationHistory.length);
-    console.log("[DEBUG] hasToolResult:", hasToolResult);
-    console.log("[DEBUG] userMessage:", userMessage);
-    console.log("[DEBUG] recentContext length:", recentContext.length);
-
-    // Log tool result if available
-    if (hasToolResult && lastMessage) {
-      const content =
-        typeof lastMessage.content === "string"
-          ? lastMessage.content
-          : JSON.stringify(lastMessage.content);
-      console.log("[DEBUG] Tool result:", content.substring(0, 500));
-    }
-
     try {
       const fullPrompt = `${UNIFIED_RESPONSE_PROMPT}
 
 Now, analyze the conversation and respond with the appropriate JSON:
 ${hasToolResult ? "\nNote: A tool result is available in the conversation history. Check if it answers the user's question." : ""}`;
-
-      console.log("[DEBUG] Full prompt length:", fullPrompt.length);
-      console.log("[DEBUG] Recent context:", recentContext);
-      console.log(
-        "[DEBUG] Prompt preview (first 2000 chars):",
-        fullPrompt.substring(0, 2000),
-      );
 
       const response = await this.sendPrompt(
         "You are an intelligent assistant. Respond with valid JSON only.",
@@ -294,8 +272,6 @@ ${hasToolResult ? "\nNote: A tool result is available in the conversation histor
           maxWaitMs: 50000, // Increased from 30s to 50s for complex prompts
         },
       );
-
-      console.log("[DEBUG] Raw LLM response:", response.content);
 
       // Clean markdown code blocks
       let cleaned = response.content
@@ -322,8 +298,6 @@ ${hasToolResult ? "\nNote: A tool result is available in the conversation histor
       // Use only the first JSON object
       cleaned = jsonMatch[0];
 
-      console.log("[DEBUG] Extracted JSON:", cleaned);
-
       // Parse and validate response
       const parsed = JSON.parse(cleaned);
 
@@ -341,11 +315,9 @@ ${hasToolResult ? "\nNote: A tool result is available in the conversation histor
         "[ERROR] generateResponse failed:",
         err instanceof Error ? err.message : err,
       );
-      console.log("[FALLBACK] Attempting fallback strategies");
 
       // Fallback Strategy 1: Try to generate answer from tool result if available
       if (hasToolResult) {
-        console.log("[FALLBACK] Found tool result, trying to generate answer");
         try {
           const answer = await this.generateAnswerFromToolResult(
             conversationHistory,
@@ -364,7 +336,6 @@ ${hasToolResult ? "\nNote: A tool result is available in the conversation histor
       }
 
       // Fallback Strategy 2: Return friendly error message
-      console.log("[FALLBACK] Using final fallback chat response");
       return {
         action: "chat",
         content: this.getFallbackChatResponse(userMessage),

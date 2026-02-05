@@ -1066,17 +1066,6 @@ function convertErrorToOllama(error: Error, model: string): OllamaChatResponse {
 - Monitor for issues in production
 - Add truncation if needed
 
-## Future Enhancements
-
-See [FUTURE_ENHANCEMENTS.md](./FUTURE_ENHANCEMENTS.md) for planned features including:
-
-- Streaming support
-- Session reuse for performance
-- Tool selection caching
-- Enhanced error recovery
-- Metrics and monitoring
-- Additional provider configurations
-
 ## Contributing
 
 When contributing to the adapter, please:

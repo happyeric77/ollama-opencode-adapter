@@ -2,6 +2,7 @@
 
 import Fastify from "fastify";
 import cors from "@fastify/cors";
+import packageJson from "../package.json" with { type: "json" };
 import { config } from "./config.js";
 import type {
   OllamaChatRequest,
@@ -17,8 +18,8 @@ import {
   convertUnifiedResponseToOllama,
   convertErrorToOllama,
 } from "./adapters/ollamaAdapter.js";
-// TODO: Should use the version from package.json dynamically
-const PACKAGE_VERSION = "0.1.0";
+
+const PACKAGE_VERSION = packageJson.version;
 
 export async function createServer() {
   const fastify = Fastify({
@@ -200,7 +201,7 @@ export async function createServer() {
           model: config.modelId,
           modified_at: new Date().toISOString(),
           size: 0, // Placeholder - we don't have actual model size
-          digest: "ha-ai-proxy",
+          digest: "ollama-opencode-adapter",
           details: {
             format: "gguf",
             family: "llama",

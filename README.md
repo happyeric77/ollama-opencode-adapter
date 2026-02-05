@@ -597,8 +597,7 @@ ollama-opencode-adapter/
 │       └── context-aware.test.ts        # 7 tests
 │
 ├── docs/
-│   ├── ARCHITECTURE.md             # Technical deep-dive
-│   └── FUTURE_ENHANCEMENTS.md      # Planned features
+│   └── ARCHITECTURE.md             # Technical deep-dive
 │
 ├── .env.example                    # Configuration template
 ├── package.json
