@@ -47,17 +47,134 @@ This adapter lets you use:
 
 ## Quick Start
 
+Choose your preferred deployment method:
+
+- **[Docker Deployment](#docker-deployment)** (Recommended) - Quickest setup, no Node.js required
+- **[Manual Installation](#manual-installation)** - For development or custom configurations
+
+Both methods require OpenCode CLI to be running. If using Docker, OpenCode is included in the container.
+
+---
+
+## Docker Deployment
+
+### Prerequisites
+
+- Docker and Docker Compose installed ([Get Docker](https://docs.docker.com/get-docker/))
+
+### Using Docker Compose (Recommended)
+
+**Step 1: Clone the repository and use the provided configuration**
+
+```bash
+git clone https://github.com/happyeric77/ollama-opencode-adapter
+cd ollama-opencode-adapter
+
+# (Optional) Edit docker-compose.yml to customize MODEL_PROVIDER and MODEL_ID
+nano docker-compose.yml
+```
+
+Or download just the `docker-compose.yml`:
+
+```bash
+curl -O https://raw.githubusercontent.com/happyeric77/ollama-opencode-adapter/main/docker-compose.yml
+```
+
+**Step 2: Start the service**
+
+```bash
+docker compose up -d
+```
+
+**Step 3: Authenticate with OpenCode (One-time)**
+
+```bash
+# Enter the running container
+docker exec -it ollama-adapter bash
+
+# Run the OpenCode CLI `auth login` command to authenticate
+opencode auth login
+# Select your provider (e.g., GitHub Copilot, OpenAI, Anthropic)
+# Complete the authentication flow
+
+# Exit the container
+exit
+```
+
+**Important:** Authentication is persisted in the `opencode-auth` volume, so you only need to do this once. The credentials survive container restarts.
+
+**Step 4: Verify**
+
+```bash
+# Check service status
+docker compose ps
+
+# Check health endpoint
+curl http://localhost:3000/health
+# Should return: {"status":"ok","opencode":"connected","ollama_compatible":true}
+
+# View logs
+docker compose logs -f
+```
+
+**Useful Commands:**
+
+```bash
+# Stop the service
+docker compose down
+
+# Update to latest image
+docker compose pull && docker compose up -d
+
+# Restart the service
+docker compose restart
+```
+
+### Using Docker CLI
+
+If you prefer using Docker CLI directly:
+
+```bash
+# Create volume for authentication persistence
+docker volume create opencode-auth
+
+# Run the container
+docker run -d \
+  --name ollama-adapter \
+  -p 3000:3000 \
+  -p 7272:7272 \
+  -e MODEL_PROVIDER=github-copilot \
+  -e MODEL_ID=gpt-4o \
+  -v opencode-auth:/root/.local/share/opencode \
+  ghcr.io/happyeric77/ollama-opencode-adapter:latest
+
+# Authenticate (same as Docker Compose Step 3)
+docker exec -it ollama-adapter bash
+opencode auth login
+exit
+```
+
+### Next Steps
+
+After Docker deployment, proceed to [Connect Your Application](#connect-your-application) to integrate with Home Assistant, n8n, or other Ollama-compatible apps.
+
+---
+
+## Manual Installation
+
+Use this method if you need to customize the code or run the adapter in development mode.
+
 ### Prerequisites
 
 1. **OpenCode CLI** installed and running
 
-   ```bash
-   # Install OpenCode (if not already installed)
-   npm install -g @opencode-ai/cli
+```bash
+# Install OpenCode (if not already installed)
+npm install -g @opencode-ai/cli
 
-   # Start OpenCode server
-   opencode serve --port 7272
-   ```
+# Start OpenCode server
+opencode serve --port 7272
+```
 
 2. **Node.js v22+** installed
 
@@ -142,9 +259,9 @@ npm start
 
 The adapter will be available at `http://localhost:3000` with full Ollama API compatibility.
 
-### Step 4: Connect Your Application
+## Connect Your Application
 
-Point your Ollama-compatible app to the adapter:
+After deploying the adapter (via Docker or manual installation), point your Ollama-compatible app to the adapter:
 
 **Home Assistant Example:**
 

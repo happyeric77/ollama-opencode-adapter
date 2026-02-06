@@ -1,0 +1,37 @@
+services:
+  # Single service running both OpenCode and Adapter
+  ollama-adapter:
+    image: ghcr.io/happyeric77/ollama-opencode-adapter:latest
+
+    ## If you wanot to build the image locally instead of pulling from GHCR, uncomment the following lines:
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
+    #   platforms:
+    #     - linux/arm64
+    container_name: ollama-adapter
+    ports:
+      - "3000:3000" # Adapter HTTP API
+      - "7272:7272" # OpenCode server
+    volumes:
+      - opencode-auth:/root/.local/share/opencode
+    environment:
+      # Adapter configuration
+      - OPENCODE_URL=http://localhost
+      - OPENCODE_PORT=7272
+      - PORT=3000
+      - HOST=0.0.0.0
+      - LOG_LEVEL=info
+      - MODEL_PROVIDER=github-copilot
+      - MODEL_ID=gpt-4o
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  opencode-auth:
+    driver: local
