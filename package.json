@@ -1,6 +1,6 @@
 {
   "name": "ollama-opencode-adapter",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Universal adapter implementing Ollama-compatible API using OpenCode SDK with manual function calling support",
   "main": "dist/index.js",
   "type": "module",

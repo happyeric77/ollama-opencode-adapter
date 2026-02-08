@@ -15,6 +15,9 @@ export interface Config {
   
   // Logging
   logLevel: 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace';
+  
+  // Error handling settings
+  errorFormatTimeout: number;
 }
 
 function getEnv(key: string, defaultValue?: string): string {
@@ -56,6 +59,9 @@ export function loadConfig(): Config {
     
     // Logging
     logLevel: (getEnv('LOG_LEVEL', 'info') as Config['logLevel']),
+    
+    // Error handling settings
+    errorFormatTimeout: getEnvNumber('ERROR_FORMAT_TIMEOUT', 8000),
   };
 }
 
