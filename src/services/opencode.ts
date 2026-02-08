@@ -311,10 +311,8 @@ ${hasToolResult ? "\nNote: A tool result is available in the conversation histor
 
       return parsed as UnifiedResponse;
     } catch (err) {
-      console.error(
-        "[ERROR] generateResponse failed:",
-        err instanceof Error ? err.message : err,
-      );
+      const error = err instanceof Error ? err : new Error(String(err));
+      console.error("[ERROR] generateResponse failed:", error.message);
 
       // Fallback Strategy 1: Try to generate answer from tool result if available
       if (hasToolResult) {
@@ -335,10 +333,12 @@ ${hasToolResult ? "\nNote: A tool result is available in the conversation histor
         }
       }
 
-      // Fallback Strategy 2: Return friendly error message
+      // Fallback Strategy 2: Use LLM to format error message
+      const errorMessage = await this.formatErrorWithLLM(error, userMessage);
+
       return {
         action: "chat",
-        content: this.getFallbackChatResponse(userMessage),
+        content: errorMessage,
       };
     }
   }
@@ -396,24 +396,79 @@ Generate ONLY the answer, nothing else:`.trim();
   }
 
   /**
+   * Format error message using LLM for user-friendly output
+   * Falls back to static message if LLM call also fails
+   *
+   * @param error - The original error that occurred
+   * @param userMessage - The user's original message (for language detection)
+   * @returns Formatted error message in user's language
+   */
+  private async formatErrorWithLLM(
+    error: Error,
+    userMessage: string,
+  ): Promise<string> {
+    const prompt = `An error occurred while processing a user request.
+
+User's original message: "${userMessage}"
+Error: ${error.message}
+
+Generate a brief, friendly error message that:
+1. Uses the SAME language as the user's message
+2. Explains what went wrong in simple terms
+3. Suggests what the user can try (if applicable)
+4. Is 1-2 sentences max
+
+Output ONLY the error message, nothing else:`;
+
+    try {
+      const response = await this.sendPrompt(
+        "You are a helpful assistant explaining errors to users.",
+        prompt,
+        {
+          sessionTitle: "error-format",
+          maxWaitMs: config.errorFormatTimeout,
+        },
+      );
+      return response.content.trim();
+    } catch (formatErr) {
+      // LLM also failed - likely connection or provider issue
+      console.error(
+        "[FALLBACK] formatErrorWithLLM failed:",
+        formatErr instanceof Error ? formatErr.message : formatErr,
+      );
+      // Use static fallback with original error message
+      return this.getFallbackChatResponse(userMessage, error);
+    }
+  }
+
+  /**
    * Get a simple fallback chat response when all else fails
    * Language detection priority: Japanese (kana) > Chinese (hanzi) > English
+   * 
+   * @param userMessage - The user's original message (for language detection)
+   * @param error - Optional error to include in the response
+   * @returns Fallback message in the detected language with error details if provided
    */
-  private getFallbackChatResponse(userMessage: string): string {
+  private getFallbackChatResponse(userMessage: string, error?: Error): string {
     // Detect Japanese first (Japanese always contains kana, Chinese doesn't)
     const hasJapaneseKana = /[\u3040-\u309f\u30a0-\u30ff]/.test(userMessage);
     const hasChineseChars = /[\u4e00-\u9fa5]/.test(userMessage);
 
+    // Simplify error message (limit to 100 chars to avoid overly long responses)
+    const errorDetail = error
+      ? ` (Error: ${error.message.slice(0, 100)})`
+      : "";
+
     if (hasJapaneseKana) {
       // Japanese (even if it contains kanji/Chinese characters)
-      return "申し訳ございませんが、現在このリクエストを処理できません。";
+      return `申し訳ございませんが、現在このリクエストを処理できません。${errorDetail}`;
     }
     if (hasChineseChars) {
       // Chinese (hanzi only, no kana)
-      return "我現在無法處理這個請求，請稍後再試。";
+      return `我現在無法處理這個請求。${errorDetail}`;
     }
     // English or other languages
-    return "I'm unable to process this request right now. Please try again later.";
+    return `I'm unable to process this request right now.${errorDetail}`;
   }
 
   isConnected(): boolean {
